@@ -1,0 +1,6 @@
+# Helvix — Parametric Coil Drafting Software
+# Python dependencies
+
+PySide6>=6.6
+ezdxf>=1.1
+numpy>=1.26
