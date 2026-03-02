@@ -121,4 +121,21 @@ def validate_parameters(params: CoilParameters) -> list[str]:
             errors.append(f"{name} must be >= 1")
     if params.top_plate + params.bottom_plate >= params.fin_height:
         errors.append("Top plate + Bottom plate must be < Fin Height")
+
+    # Side-view non-overlap checks (left and right views follow table diameter)
+    vp = params.vertical_pitch
+    rp = params.row_pitch
+    d = params.tube_diameter
+    if vp > 0 and vp < d:
+        errors.append(
+            "Invalid combination: Vertical Pitch is smaller than Tube Diameter. "
+            "Increase Fin Height or reduce TPR / tube size to avoid overlap in side views."
+        )
+    if rp > 0 and vp > 0:
+        stagger_dist = ((rp * rp) + ((vp / 2.0) * (vp / 2.0))) ** 0.5
+        if stagger_dist < d:
+            errors.append(
+                "Invalid combination: Staggered row spacing is smaller than Tube Diameter. "
+                "Increase Coil Depth or reduce Number of Rows / tube size to avoid overlap in side views."
+            )
     return errors
