@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Any
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QPainter, QPen, QColor, QFont, QFontMetricsF
+from PySide6.QtGui import QPainter, QPen, QColor, QFont, QFontMetricsF, QBrush
 from core.dimension_engine import arrowhead_lines
 
 # ── Pens ──────────────────────────────────────────────────────────────────────
@@ -41,6 +41,12 @@ class QtRenderer:
     def _arc(self, cx, cy, r, start, span):
         self._p.drawArc(QRectF(cx-r, cy-r, 2*r, 2*r), int(start*16), int(span*16))
 
+    def _filled_circle(self, cx, cy, r):
+        self._p.save()
+        self._p.setBrush(QBrush(self._p.pen().color()))
+        self._p.drawEllipse(QPointF(cx, cy), r, r)
+        self._p.restore()
+
     def _rect(self, x, y, w, h):
         self._p.drawRect(QRectF(x, y, w, h))
 
@@ -59,10 +65,10 @@ class QtRenderer:
 
     # ── composite: geometry ───────────────────────────────────────────────
     def render_geometry(self, geo: dict[str, Any]):
-        if "outer_rect" in geo:
+        if "outer_rect" in geo and geo.get("view_type") != "TOP":
             self._p.setPen(_PEN_CASING)
             self._rect(*geo["outer_rect"])
-        if "fin_rect" in geo:
+        if "fin_rect" in geo and geo.get("view_type") != "TOP":
             self._p.setPen(_PEN_OBJ)
             self._rect(*geo["fin_rect"])
         if "header_block_rect" in geo:
@@ -84,7 +90,7 @@ class QtRenderer:
             for seg in geo["tube_lines"]:
                 self._line(*seg)
         if "zone_lines" in geo:
-            self._p.setPen(_PEN_ZONE)
+            self._p.setPen(_PEN_CASING if geo.get("view_type") == "TOP" else _PEN_ZONE)
             for seg in geo["zone_lines"]:
                 self._line(*seg)
         if "tubes" in geo:
@@ -92,8 +98,12 @@ class QtRenderer:
             for cx, cy, r in geo["tubes"]:
                 self._circle(cx, cy, r)
         if "bend_arcs" in geo:
-            self._p.setPen(_PEN_BEND)
+            self._p.setPen(_PEN_CASING if geo.get("view_type") == "TOP" else _PEN_BEND)
             for arc in geo["bend_arcs"]:
+                self._arc(*arc)
+        if "bend_center_arcs" in geo:
+            self._p.setPen(_PEN_FIN)          # red dash-dot centre line
+            for arc in geo["bend_center_arcs"]:
                 self._arc(*arc)
         if "connection_pipes" in geo:
             for pipe in geo["connection_pipes"]:
@@ -109,6 +119,22 @@ class QtRenderer:
         if "pipe_stubs" in geo:
             self._p.setPen(_PEN_PIPE)
             for seg in geo["pipe_stubs"]:
+                self._line(*seg)
+        if "pipe_ribs" in geo:
+            self._p.setPen(_PEN_PIPE)
+            for seg in geo["pipe_ribs"]:
+                self._line(*seg)
+        if "pipe_bodies" in geo:
+            self._p.setPen(_PEN_PIPE)
+            for rect in geo["pipe_bodies"]:
+                self._rect(*rect)
+        if "pipe_center_dots" in geo:
+            self._p.setPen(_PEN_PIPE)
+            for cx, cy, r in geo["pipe_center_dots"]:
+                self._filled_circle(cx, cy, r)
+        if "tube_center_lines" in geo and geo.get("view_type") != "TOP":
+            self._p.setPen(_PEN_ZONE)
+            for seg in geo["tube_center_lines"]:
                 self._line(*seg)
         if "return_rect" in geo:
             self._p.setPen(_PEN_CASING)

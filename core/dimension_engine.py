@@ -202,11 +202,15 @@ def generate_top_dimensions(geo: dict) -> list[dict]:
     # ══════════════════════════════════════════════════════════════════════
     #  TOP – pipe run dimension  350  (170 + 180)
     # ══════════════════════════════════════════════════════════════════════
-    dims.append(_hdim((-pipe_ext, oy), (ox + header_block_len, oy), -15,
+    # The image shows dimension 350 spanning from Pipe Fitting (circle) to Header Block End.
+    # 170 is Pipe Ext (Circle to Casing). 180 is Header Block Length.
+    dims.append(_hdim((-pipe_ext, oy), (ox + header_block_len, oy), -15, 
                       f"{pipe_ext + header_block_len:.0f}", above=True))
-    dims.append(_hdim((-pipe_ext, oy), (ox,         oy), -28,
+    
+    dims.append(_hdim((-pipe_ext, oy), (ox, oy), -30, 
                       f"{pipe_ext:.0f}", above=True))
-    dims.append(_hdim((ox,        oy), (ox + header_block_len, oy), -28,
+    
+    dims.append(_hdim((ox, oy), (ox + header_block_len, oy), -30, 
                       f"{header_block_len:.0f}", above=True))
 
     # ══════════════════════════════════════════════════════════════════════
@@ -242,9 +246,9 @@ def generate_top_dimensions(geo: dict) -> list[dict]:
     dims.append(_vdim((ox + ow, fy + fh), (ox + ow, oy + oh), 12,
                       f"{margin:.1f}", right=True))
 
-    # Small 12 mm box at top-right
-    dims.append(_vdim((ox + ow + return_ext, oy),
-                      (ox + ow + return_ext, oy + top_right_step), 12,
+    # Small 12 mm notch at top-right (on bracket step)
+    dims.append(_vdim((ox + ow + return_ext, fy - top_right_step),
+                      (ox + ow + return_ext, fy), 12,
                       f"{top_right_step:.0f}", right=True))
 
     return dims

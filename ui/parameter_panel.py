@@ -135,7 +135,7 @@ class ParameterPanel(QWidget):
         grp5 = QGroupBox("Detail Offsets")
         form5 = QFormLayout(grp5)
 
-        self.sp_pipe_fit_outer = self._dspin(1, 500, 50, " mm")
+        self.sp_pipe_fit_outer = self._dspin(1, 500, 90, " mm")
         form5.addRow("Pipe Fit Outer Off:", self.sp_pipe_fit_outer)
 
         self.sp_pipe_fit_inner = self._dspin(1, 500, 25, " mm")

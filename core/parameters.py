@@ -55,7 +55,7 @@ class CoilParameters:
     top_header_block_length: float = 180.0  # left-side header block feature
     top_return_extension: float = 145.0     # right-side return assembly extension
     top_right_step: float = 12.0            # top-right notch/step dimension
-    top_pipe_fitting_outer_offset: float = 50.0  # from outer pipe tip to first fitting center
+    top_pipe_fitting_outer_offset: float = 90.0  # distance from pipe tip to open port circle
     top_pipe_fitting_inner_offset: float = 25.0  # from header-block edge to inner fitting center
     top_pipe_stub_center_offset: float = 50.0    # from outer pipe tip to stub center
     top_pipe_stub_spacing: float = 12.0          # distance between stub lines
