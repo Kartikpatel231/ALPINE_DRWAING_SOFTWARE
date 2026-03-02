@@ -318,6 +318,7 @@ def generate_top_geometry(params: CoilParameters) -> dict[str, Any]:
             "label_pos": (tip_right + label_off, py),
         })
 
+
         pipe_bodies.append((tip_left, py - body_hh, tip_w, body_hh * 2.0))
         pipe_bodies.append((neck_right, py - body_hh * 0.9, neck_w, body_hh * 1.8))
         pipe_bodies.append((neck_right + neck_w, py - body_hh, body_w, body_hh * 2.0))
