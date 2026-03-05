@@ -18,9 +18,9 @@ jobs:
     - run: pip install -r requirements.txt
     - run: pip install pyinstaller
 
-    - run: pyinstaller --onefile main.py
+    - run: pyinstaller --onefile app.py
 
     - uses: actions/upload-artifact@v4
       with:
-        name: alpine-drawing-software
-        path: dist/main.exe
+        name: alpine-drawing-software-by-halvixtechnologies
+        path: dist/app.exe
