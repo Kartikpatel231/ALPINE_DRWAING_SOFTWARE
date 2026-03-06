@@ -9,6 +9,7 @@ from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen, QPo
 from PyQt6.QtPrintSupport import QPrintDialog, QPrinter
 from PyQt6.QtWidgets import (
     QApplication,
+    QComboBox,
     QDialog,
     QDoubleSpinBox,
     QFileDialog,
@@ -45,6 +46,8 @@ class CoilDimensions:
     left_panel_width: float = 35.0
     right_panel_width: float = 65.0
     top_bottom_margin: float = 15.0
+    top_plate: float = 15.0
+    bottom_plate: float = 15.0
     core_width: float = 320.0
     left_pipe_offset: float = 170.0
     left_pipe_length: float = 180.0
@@ -55,6 +58,16 @@ class CoilDimensions:
     top_small_offset_1: float = 56.2
     top_small_offset_2: float = 56.2
     fpi: float = 13.0
+    tube_dia_inch: float = 0.625
+    pitch_vertical: float = 33.4
+    pitch_horizontal: float = 35.2
+    connection_side: str = "LHS"
+    circle_diameter: float = 8.4
+    tubes_per_row: float = 42.0
+    number_of_rows: float = 6.0
+    number_of_circuits: float = 13.0
+    header_dia: float = 170.0
+    blank_off_bend: float = 12.0
 
     @property
     def fin_length(self) -> float:
@@ -62,7 +75,7 @@ class CoilDimensions:
 
     @property
     def fin_height(self) -> float:
-        return max(20.0, self.front_total_height - (2.0 * self.top_bottom_margin))
+        return max(20.0, self.front_total_height - self.top_plate - self.bottom_plate)
 
     @property
     def top_lead_span(self) -> float:
@@ -85,7 +98,29 @@ class CoilDimensions:
         value.right_panel_width = max(5.0, min(value.right_panel_width, panel_limit - value.left_panel_width))
 
         margin_limit = (value.front_total_height / 2.0) - 10.0
-        value.top_bottom_margin = max(5.0, min(value.top_bottom_margin, margin_limit))
+        legacy_margin = max(5.0, min(value.top_bottom_margin, margin_limit))
+
+        default_top_plate = CoilDimensions.top_plate
+        default_bottom_plate = CoilDimensions.bottom_plate
+        if (
+            abs(value.top_plate - default_top_plate) < 1e-6
+            and abs(value.bottom_plate - default_bottom_plate) < 1e-6
+            and abs(legacy_margin - CoilDimensions.top_bottom_margin) > 1e-6
+        ):
+            value.top_plate = legacy_margin
+            value.bottom_plate = legacy_margin
+
+        value.top_plate = max(5.0, min(value.top_plate, margin_limit))
+        value.bottom_plate = max(5.0, min(value.bottom_plate, margin_limit))
+
+        pair_margin_limit = max(10.0, value.front_total_height - 20.0)
+        pair_margin_total = value.top_plate + value.bottom_plate
+        if pair_margin_total > pair_margin_limit:
+            ratio = pair_margin_limit / pair_margin_total
+            value.top_plate = max(5.0, value.top_plate * ratio)
+            value.bottom_plate = max(5.0, value.bottom_plate * ratio)
+
+        value.top_bottom_margin = (value.top_plate + value.bottom_plate) / 2.0
         min_header = value.left_panel_width + 20.0
         value.front_header_band_width = max(min_header, min(value.front_header_band_width, value.front_total_width - 20.0))
 
@@ -111,6 +146,20 @@ class CoilDimensions:
             value.top_small_offset_2 = max(5.0, value.top_small_offset_2 * ratio)
 
         value.fpi = max(1.0, min(value.fpi, 60.0))
+        value.tube_dia_inch = max(0.1, min(value.tube_dia_inch, 2.0))
+        value.pitch_vertical = max(5.0, min(value.pitch_vertical, 120.0))
+        value.pitch_horizontal = max(5.0, min(value.pitch_horizontal, 120.0))
+        value.circle_diameter = max(2.0, min(value.circle_diameter, 40.0))
+        value.tubes_per_row = max(1.0, min(value.tubes_per_row, 300.0))
+        value.number_of_rows = max(1.0, min(value.number_of_rows, 40.0))
+        value.number_of_circuits = max(1.0, min(value.number_of_circuits, 100.0))
+        value.header_dia = max(20.0, min(value.header_dia, 500.0))
+        value.blank_off_bend = max(0.0, min(value.blank_off_bend, 200.0))
+
+        normalized_connection = str(value.connection_side).strip().upper()
+        if normalized_connection not in {"LHS", "RHS"}:
+            normalized_connection = "LHS"
+        value.connection_side = normalized_connection
         return value
 
 
@@ -340,9 +389,13 @@ class DxfPainterAdapter:
             self._add_polyline(points, close=is_closed)
 
     def write_dimensions_metadata(self, dims: CoilDimensions) -> None:
-        payload: dict[str, float] = {}
+        payload: dict[str, object] = {}
         for field_info in fields(CoilDimensions):
-            payload[field_info.name] = float(getattr(dims, field_info.name))
+            field_value = getattr(dims, field_info.name)
+            if isinstance(field_value, (int, float, str, bool)):
+                payload[field_info.name] = field_value
+            else:
+                payload[field_info.name] = str(field_value)
 
         metadata_text = f"{self.METADATA_PREFIX}{json.dumps(payload, separators=(',', ':'), sort_keys=True)}"
         entity = self._msp.add_text(
@@ -692,7 +745,7 @@ class CoilDrawingWidget(QWidget):
         painter.drawLine(QPointF(fin_start, header_y), QPointF(fin_end, header_y))
         painter.drawLine(QPointF(fin_start, header_y + header_h), QPointF(fin_end, header_y + header_h))
 
-        left_stub = min(12.0, max(7.0, top_h * 0.08))
+        left_stub = max(2.0, min(dims.blank_off_bend, top_h * 0.25))
         bottom_cover_start = min(face_start, intermediate_start)
         painter.drawLine(QPointF(face_start, left_gap_top_y), QPointF(fin_start, left_gap_top_y))
         painter.drawLine(QPointF(face_start, left_gap_top_y), QPointF(face_start, left_gap_top_y + left_stub))
@@ -709,8 +762,8 @@ class CoilDrawingWidget(QWidget):
 
         nozzle_y_positions = [header_y + (header_h * 0.30), header_y + (header_h * 0.72)]
         for nozzle_y, name in zip(nozzle_y_positions, ["IN", "OUT"]):
-            body_h = 18.0
-            neck_h = 14.0
+            body_h = max(10.0, min(30.0, dims.header_dia / 9.5))
+            neck_h = max(8.0, min(body_h - 2.0, body_h * 0.78))
             thread_len = min(28.0, max(16.0, dims.nozzle_projection * 0.34))
             body_end_x = x0 + dims.nozzle_projection
 
@@ -788,7 +841,8 @@ class CoilDrawingWidget(QWidget):
             y_top = min(y_a, y_b)
             y_mid = (y_a + y_b) / 2.0
 
-            wall_thickness = min(4.6, loop_dia * 0.28)
+            tube_wall_visual = max(2.0, min(6.0, dims.tube_dia_inch * 7.36))
+            wall_thickness = min(tube_wall_visual, loop_dia * 0.28)
             outer_dia = loop_dia + wall_thickness
             inner_dia = max(2.0, loop_dia - wall_thickness)
 
@@ -872,7 +926,7 @@ class CoilDrawingWidget(QWidget):
         face_right = face_left + face_w
 
         inner_x = x + dims.front_header_band_width
-        inner_y = y + dims.top_bottom_margin
+        inner_y = y + dims.top_plate
         inner_right_x = face_right - dims.right_panel_width
         inner_w = max(20.0, inner_right_x - inner_x)
         inner_h = dims.fin_height
@@ -963,19 +1017,19 @@ class CoilDrawingWidget(QWidget):
         self._draw_dim_v(
             painter,
             y,
-            y + dims.top_bottom_margin,
+            y + dims.top_plate,
             face_right,
             129.0,
-            f"{dims.top_bottom_margin:.0f}",
+            f"{dims.top_plate:.0f}",
             text_vertical=True,
         )
         self._draw_dim_v(
             painter,
-            y + h - dims.top_bottom_margin,
+            y + h - dims.bottom_plate,
             y + h,
             face_right,
             129.0,
-            f"{dims.top_bottom_margin:.0f}",
+            f"{dims.bottom_plate:.0f}",
             text_vertical=True,
         )
 
@@ -1026,22 +1080,28 @@ class CoilDrawingWidget(QWidget):
             painter.drawEllipse(QPointF(map_x(hole_x), y + 8.0), frame_hole_radius, frame_hole_radius)
             painter.drawEllipse(QPointF(map_x(hole_x), y + h - 8.0), frame_hole_radius, frame_hole_radius)
 
-        # Inner-hole matrix using pitch-based placement steps from the reference procedure.
-        hole_diameter = max(6.4, min(9.2, (w / 320.0) * 8.4))
+        rows_in_width = max(1, int(round(dims.number_of_rows)))
+        tubes_per_row = max(1, int(round(dims.tubes_per_row)))
+
+        requested_horizontal_pitch = max(5.0, dims.pitch_horizontal)
+        requested_vertical_pitch = max(5.0, dims.pitch_vertical)
+
+        available_w = max(20.0, w - 28.0)
+        available_h = max(60.0, h - 28.0)
+        horizontal_pitch = min(requested_horizontal_pitch, available_w / max(1, rows_in_width))
+        vertical_pitch = min(requested_vertical_pitch, available_h / max(1.0, tubes_per_row - 0.25))
+
+        matrix_w = rows_in_width * horizontal_pitch
+        matrix_h = (tubes_per_row - 0.25) * vertical_pitch
+
+        hole_box_left = max(14.0, (w - matrix_w) / 2.0)
+        hole_box_top = max(14.0, (h - matrix_h) / 2.0)
+
+        effective_dia_limit = min(horizontal_pitch, vertical_pitch) * 0.86
+        hole_diameter = max(2.0, min(dims.circle_diameter, effective_dia_limit))
         hole_radius = hole_diameter / 2.0
 
-        rows_in_width = 6
-        tubes_per_row = max(12, int(round((h / 1430.0) * 42.0)))
-
-        hole_box_left = max(14.0, w * 0.17)
-        hole_box_top = max(14.0, h * 0.012)
-        hole_box_w = max(20.0, w - (2.0 * hole_box_left))
-        hole_box_h = max(60.0, h - (2.0 * hole_box_top))
-
-        horizontal_pitch = hole_box_w / max(1, rows_in_width)
-        vertical_pitch = hole_box_h / max(1, tubes_per_row - 0.25)
-
-        # Step-5: first center from top-left of hole box => (HP/2, VP/4).
+        # First center from top-left of hole matrix => (HP/2, VP/4).
         first_center_x = hole_box_left + (horizontal_pitch * 0.5)
         first_center_y = hole_box_top + (vertical_pitch * 0.25)
 
@@ -1056,25 +1116,25 @@ class CoilDrawingWidget(QWidget):
 
             for tube_index in range(tubes_per_row):
                 hole_y = row_start_y + (tube_index * vertical_pitch)
-                if hole_y > (hole_box_top + hole_box_h + 0.001):
+                if hole_y > (hole_box_top + matrix_h + 0.001):
                     continue
                 painter.drawEllipse(QPointF(map_x(row_center_x), y + hole_y), hole_radius, hole_radius)
 
         self._draw_dim_h(painter, x, x + w, y + h, 45.0, f"{w:.0f}")
 
         if show_vertical_dims:
-            inner_y = y + dims.top_bottom_margin
+            inner_y = y + dims.top_plate
             inner_h = dims.fin_height
             self._draw_dim_v(painter, inner_y, inner_y + inner_h, x + w, 49.0, f"{inner_h:.0f} (FH)")
             self._draw_dim_v(painter, y, y + h, x + w, 89.0, f"{h:.0f}")
-            self._draw_dim_v(painter, y, y + dims.top_bottom_margin, x + w, 127.0, f"{dims.top_bottom_margin:.0f}")
+            self._draw_dim_v(painter, y, y + dims.top_plate, x + w, 127.0, f"{dims.top_plate:.0f}")
             self._draw_dim_v(
                 painter,
-                y + h - dims.top_bottom_margin,
+                y + h - dims.bottom_plate,
                 y + h,
                 x + w,
                 127.0,
-                f"{dims.top_bottom_margin:.0f}",
+                f"{dims.bottom_plate:.0f}",
             )
 
         painter.setPen(object_pen)
@@ -1238,6 +1298,7 @@ class MainWindow(QMainWindow):
         self.default_dims = CoilDimensions()
         self._spin_boxes: dict[str, QDoubleSpinBox] = {}
         self._direct_spin_boxes: dict[str, QDoubleSpinBox] = {}
+        self._connection_side_combo: QComboBox | None = None
         self._is_syncing_inputs = False
         self._is_syncing_direct_inputs = False
 
@@ -1266,6 +1327,7 @@ class MainWindow(QMainWindow):
         content_layout.addWidget(self._build_top_group())
         content_layout.addWidget(self._build_front_group())
         content_layout.addWidget(self._build_side_group())
+        content_layout.addWidget(self._build_spec_group())
         content_layout.addWidget(self._build_direct_group())
         content_layout.addWidget(self._build_derived_group())
         content_layout.addLayout(self._build_buttons_row())
@@ -1291,14 +1353,14 @@ class MainWindow(QMainWindow):
             100,
             6000,
         )
-        self._add_spin(form, "left_pipe_offset", "Left Pipe Offset", self.default_dims.left_pipe_offset, 0, 2000)
-        self._add_spin(form, "left_pipe_length", "Left Pipe Length", self.default_dims.left_pipe_length, 10, 3000)
+        self._add_spin(form, "left_pipe_offset", "Header Extension", self.default_dims.left_pipe_offset, 0, 2000)
+        self._add_spin(form, "left_pipe_length", "Stub Length", self.default_dims.left_pipe_length, 10, 3000)
         self._add_spin(form, "nozzle_projection", "Nozzle Projection", self.default_dims.nozzle_projection, 10, 500)
         self._add_spin(form, "header_box_height", "Header Box Height", self.default_dims.header_box_height, 40, 2000)
         self._add_spin(
             form,
             "right_cap_thickness",
-            "Right Cap Thickness",
+            "Header Flange First Bend",
             self.default_dims.right_cap_thickness,
             2,
             400,
@@ -1313,13 +1375,14 @@ class MainWindow(QMainWindow):
 
         self._add_spin(form, "front_total_width", "Front Total Width", self.default_dims.front_total_width, 200, 6000)
         self._add_spin(form, "front_total_height", "Front Total Height", self.default_dims.front_total_height, 200, 6000)
-        self._add_spin(form, "left_panel_width", "Left Panel Width", self.default_dims.left_panel_width, 5, 2000)
-        self._add_spin(form, "right_panel_width", "Right Panel Width", self.default_dims.right_panel_width, 5, 2000)
-        self._add_spin(form, "top_bottom_margin", "Top/Bottom Margin", self.default_dims.top_bottom_margin, 5, 1000)
+        self._add_spin(form, "left_panel_width", "Header Side Flange", self.default_dims.left_panel_width, 5, 2000)
+        self._add_spin(form, "right_panel_width", "Return Side Flange", self.default_dims.right_panel_width, 5, 2000)
+        self._add_spin(form, "top_plate", "Top Plate", self.default_dims.top_plate, 5, 1000)
+        self._add_spin(form, "bottom_plate", "Bottom Plate", self.default_dims.bottom_plate, 5, 1000)
         self._add_spin(
             form,
             "front_header_band_width",
-            "Header Band Width",
+            "Blank Off Width",
             self.default_dims.front_header_band_width,
             20,
             3000,
@@ -1331,6 +1394,37 @@ class MainWindow(QMainWindow):
         group = QGroupBox("Side View Dimensions")
         form = QFormLayout(group)
         self._add_spin(form, "core_width", "Side Width / Top Height", self.default_dims.core_width, 60, 3000)
+        return group
+
+    def _build_spec_group(self) -> QGroupBox:
+        group = QGroupBox("Tube & Circuit Specs")
+        form = QFormLayout(group)
+
+        self._add_spin(form, "tube_dia_inch", "Tube Dia (inch)", self.default_dims.tube_dia_inch, 0.1, 2.0, decimals=3)
+        self._add_spin(form, "pitch_vertical", "Vertical Pitch", self.default_dims.pitch_vertical, 5.0, 120.0)
+        self._add_spin(form, "pitch_horizontal", "Horizontal Pitch", self.default_dims.pitch_horizontal, 5.0, 120.0)
+
+        connection_combo = QComboBox()
+        connection_combo.addItems(["LHS", "RHS"])
+        connection_combo.setCurrentText(self.default_dims.connection_side)
+        connection_combo.currentTextChanged.connect(self._apply_changes)
+        self._connection_side_combo = connection_combo
+        form.addRow("Connection", connection_combo)
+
+        self._add_spin(form, "circle_diameter", "Circle Diameter", self.default_dims.circle_diameter, 2.0, 40.0, decimals=2)
+        self._add_spin(form, "tubes_per_row", "Tubes per row (TPR)", self.default_dims.tubes_per_row, 1.0, 300.0, decimals=0)
+        self._add_spin(form, "number_of_rows", "No. of Rows", self.default_dims.number_of_rows, 1.0, 40.0, decimals=0)
+        self._add_spin(
+            form,
+            "number_of_circuits",
+            "No. of Circuits",
+            self.default_dims.number_of_circuits,
+            1.0,
+            100.0,
+            decimals=0,
+        )
+        self._add_spin(form, "header_dia", "Header Dia", self.default_dims.header_dia, 20.0, 500.0)
+        self._add_spin(form, "blank_off_bend", "Blank Off Bend", self.default_dims.blank_off_bend, 0.0, 200.0)
         return group
 
     def _build_derived_group(self) -> QGroupBox:
@@ -1454,6 +1548,13 @@ class MainWindow(QMainWindow):
         form.addRow(label, spin)
 
     def _collect_dimensions(self) -> CoilDimensions:
+        connection_side = self.default_dims.connection_side
+        if self._connection_side_combo is not None:
+            connection_side = self._connection_side_combo.currentText()
+
+        top_plate_value = self._spin_boxes["top_plate"].value()
+        bottom_plate_value = self._spin_boxes["bottom_plate"].value()
+
         return CoilDimensions(
             top_total_length=self._spin_boxes["top_total_length"].value(),
             top_intermediate_length=self._spin_boxes["top_intermediate_length"].value(),
@@ -1461,7 +1562,9 @@ class MainWindow(QMainWindow):
             front_total_height=self._spin_boxes["front_total_height"].value(),
             left_panel_width=self._spin_boxes["left_panel_width"].value(),
             right_panel_width=self._spin_boxes["right_panel_width"].value(),
-            top_bottom_margin=self._spin_boxes["top_bottom_margin"].value(),
+            top_bottom_margin=(top_plate_value + bottom_plate_value) / 2.0,
+            top_plate=top_plate_value,
+            bottom_plate=bottom_plate_value,
             core_width=self._spin_boxes["core_width"].value(),
             left_pipe_offset=self._spin_boxes["left_pipe_offset"].value(),
             left_pipe_length=self._spin_boxes["left_pipe_length"].value(),
@@ -1472,6 +1575,16 @@ class MainWindow(QMainWindow):
             top_small_offset_1=self._spin_boxes["top_small_offset_1"].value(),
             top_small_offset_2=self._spin_boxes["top_small_offset_2"].value(),
             fpi=self._spin_boxes["fpi"].value(),
+            tube_dia_inch=self._spin_boxes["tube_dia_inch"].value(),
+            pitch_vertical=self._spin_boxes["pitch_vertical"].value(),
+            pitch_horizontal=self._spin_boxes["pitch_horizontal"].value(),
+            connection_side=connection_side,
+            circle_diameter=self._spin_boxes["circle_diameter"].value(),
+            tubes_per_row=self._spin_boxes["tubes_per_row"].value(),
+            number_of_rows=self._spin_boxes["number_of_rows"].value(),
+            number_of_circuits=self._spin_boxes["number_of_circuits"].value(),
+            header_dia=self._spin_boxes["header_dia"].value(),
+            blank_off_bend=self._spin_boxes["blank_off_bend"].value(),
         )
 
     def _apply_changes(self) -> None:
@@ -1480,6 +1593,7 @@ class MainWindow(QMainWindow):
 
         dims = self._collect_dimensions().sanitized()
         self._sync_spin_values(dims)
+        self._sync_connection_side(dims)
         self._sync_direct_spin_values(dims)
         self._fl_label.setText(f"{dims.fin_length:.1f}")
         self._fh_label.setText(f"{dims.fin_height:.1f}")
@@ -1497,7 +1611,13 @@ class MainWindow(QMainWindow):
 
         dims.top_total_length = lead_span + dims.front_total_width - dims.left_panel_width
         dims.right_panel_width = dims.front_total_width - dims.left_panel_width - fin_length
-        dims.top_bottom_margin = (dims.front_total_height - fin_height) / 2.0
+        total_plate_span = max(10.0, dims.front_total_height - fin_height)
+        previous_total = max(0.001, dims.top_plate + dims.bottom_plate)
+        top_ratio = dims.top_plate / previous_total
+        top_ratio = max(0.0, min(top_ratio, 1.0))
+        dims.top_plate = total_plate_span * top_ratio
+        dims.bottom_plate = total_plate_span - dims.top_plate
+        dims.top_bottom_margin = (dims.top_plate + dims.bottom_plate) / 2.0
         dims = dims.sanitized()
 
         self._sync_spin_values(dims)
@@ -1511,7 +1631,8 @@ class MainWindow(QMainWindow):
             "front_total_height": dims.front_total_height,
             "left_panel_width": dims.left_panel_width,
             "right_panel_width": dims.right_panel_width,
-            "top_bottom_margin": dims.top_bottom_margin,
+            "top_plate": dims.top_plate,
+            "bottom_plate": dims.bottom_plate,
             "core_width": dims.core_width,
             "left_pipe_offset": dims.left_pipe_offset,
             "left_pipe_length": dims.left_pipe_length,
@@ -1522,12 +1643,23 @@ class MainWindow(QMainWindow):
             "top_small_offset_1": dims.top_small_offset_1,
             "top_small_offset_2": dims.top_small_offset_2,
             "fpi": dims.fpi,
+            "tube_dia_inch": dims.tube_dia_inch,
+            "pitch_vertical": dims.pitch_vertical,
+            "pitch_horizontal": dims.pitch_horizontal,
+            "circle_diameter": dims.circle_diameter,
+            "tubes_per_row": dims.tubes_per_row,
+            "number_of_rows": dims.number_of_rows,
+            "number_of_circuits": dims.number_of_circuits,
+            "header_dia": dims.header_dia,
+            "blank_off_bend": dims.blank_off_bend,
         }
 
         self._is_syncing_inputs = True
         try:
             for key, value in values.items():
-                spin = self._spin_boxes[key]
+                spin = self._spin_boxes.get(key)
+                if spin is None:
+                    continue
                 if abs(spin.value() - value) < 1e-6:
                     continue
                 spin.blockSignals(True)
@@ -1535,6 +1667,19 @@ class MainWindow(QMainWindow):
                 spin.blockSignals(False)
         finally:
             self._is_syncing_inputs = False
+
+    def _sync_connection_side(self, dims: CoilDimensions) -> None:
+        if self._connection_side_combo is None:
+            return
+
+        current_text = self._connection_side_combo.currentText().strip().upper()
+        next_text = dims.connection_side.strip().upper()
+        if current_text == next_text:
+            return
+
+        self._connection_side_combo.blockSignals(True)
+        self._connection_side_combo.setCurrentText(next_text)
+        self._connection_side_combo.blockSignals(False)
 
     def _sync_direct_spin_values(self, dims: CoilDimensions) -> None:
         values = {
@@ -1558,7 +1703,9 @@ class MainWindow(QMainWindow):
             self._is_syncing_direct_inputs = False
 
     def _reset_defaults(self) -> None:
-        self._sync_spin_values(self.default_dims.sanitized())
+        default_values = self.default_dims.sanitized()
+        self._sync_spin_values(default_values)
+        self._sync_connection_side(default_values)
         self._apply_changes()
 
     def _zoom_in(self) -> None:
@@ -1642,6 +1789,7 @@ class MainWindow(QMainWindow):
                 return
 
             self._sync_spin_values(imported_dims)
+            self._sync_connection_side(imported_dims)
             self._apply_changes()
             QMessageBox.information(self, "Import Successful", "Dimensions imported successfully from DFX/DXF.")
         except Exception as error:
@@ -1695,6 +1843,7 @@ class MainWindow(QMainWindow):
         fin_length_tag: float | None = None
         fin_height_tag: float | None = None
         fpi_tag: float | None = None
+        connection_side_hint: str | None = None
 
         for entity in doc.modelspace():
             entity_type = entity.dxftype()
@@ -1729,6 +1878,10 @@ class MainWindow(QMainWindow):
                 fin_length_tag = number
             if "(FH)" in upper_text and fin_height_tag is None:
                 fin_height_tag = number
+            if "RHS" in upper_text:
+                connection_side_hint = "RHS"
+            elif "LHS" in upper_text:
+                connection_side_hint = "LHS"
 
             if re.search(r"[A-Za-z]", text) is None:
                 plain_values.append(number)
@@ -1778,12 +1931,21 @@ class MainWindow(QMainWindow):
             pick_nearest(defaults.top_intermediate_length, 100.0, top_total_length) or defaults.top_intermediate_length
         )
 
-        top_bottom_margin = pick_nearest(defaults.top_bottom_margin, 5.0, 1000.0) or defaults.top_bottom_margin
+        top_plate = pick_nearest(defaults.top_plate, 5.0, 1000.0) or defaults.top_plate
+        bottom_plate = pick_nearest(defaults.bottom_plate, 5.0, 1000.0) or defaults.bottom_plate
+        legacy_margin = pick_nearest(defaults.top_bottom_margin, 5.0, 1000.0, consume=False)
+        if legacy_margin is not None:
+            if abs(top_plate - defaults.top_plate) < 1e-6:
+                top_plate = legacy_margin
+            if abs(bottom_plate - defaults.bottom_plate) < 1e-6:
+                bottom_plate = legacy_margin
+
+        top_bottom_margin = (top_plate + bottom_plate) / 2.0
         front_total_height = pick_nearest(defaults.front_total_height, 300.0, 6000.0)
         if front_total_height is None:
-            front_total_height = fin_height + (2.0 * top_bottom_margin)
+            front_total_height = fin_height + top_plate + bottom_plate
         elif fin_height_tag is not None:
-            expected_height = fin_height + (2.0 * top_bottom_margin)
+            expected_height = fin_height + top_plate + bottom_plate
             if abs(front_total_height - expected_height) > 5.0:
                 front_total_height = expected_height
 
@@ -1811,6 +1973,19 @@ class MainWindow(QMainWindow):
         top_small_offset_1 = pick_nearest(defaults.top_small_offset_1, 5.0, 500.0) or defaults.top_small_offset_1
         top_small_offset_2 = pick_nearest(defaults.top_small_offset_2, 5.0, 500.0) or top_small_offset_1
 
+        tube_dia_inch = defaults.tube_dia_inch
+        pitch_vertical = pick_nearest(defaults.pitch_vertical, 5.0, 120.0, consume=False) or defaults.pitch_vertical
+        pitch_horizontal = pick_nearest(defaults.pitch_horizontal, 5.0, 120.0, consume=False) or defaults.pitch_horizontal
+        connection_side = connection_side_hint or defaults.connection_side
+        circle_diameter = pick_nearest(defaults.circle_diameter, 2.0, 40.0, consume=False) or defaults.circle_diameter
+        tubes_per_row = pick_nearest(defaults.tubes_per_row, 1.0, 300.0, consume=False) or defaults.tubes_per_row
+        number_of_rows = pick_nearest(defaults.number_of_rows, 1.0, 40.0, consume=False) or defaults.number_of_rows
+        number_of_circuits = (
+            pick_nearest(defaults.number_of_circuits, 1.0, 100.0, consume=False) or defaults.number_of_circuits
+        )
+        header_dia = pick_nearest(defaults.header_dia, 20.0, 500.0, consume=False) or defaults.header_dia
+        blank_off_bend = pick_nearest(defaults.blank_off_bend, 0.0, 200.0, consume=False) or defaults.blank_off_bend
+
         reconstructed = CoilDimensions(
             top_total_length=top_total_length,
             top_intermediate_length=top_intermediate_length,
@@ -1819,6 +1994,8 @@ class MainWindow(QMainWindow):
             left_panel_width=left_panel_width,
             right_panel_width=right_panel_width,
             top_bottom_margin=top_bottom_margin,
+            top_plate=top_plate,
+            bottom_plate=bottom_plate,
             core_width=core_width,
             left_pipe_offset=left_pipe_offset,
             left_pipe_length=left_pipe_length,
@@ -1829,17 +2006,31 @@ class MainWindow(QMainWindow):
             top_small_offset_1=top_small_offset_1,
             top_small_offset_2=top_small_offset_2,
             fpi=fpi,
+            tube_dia_inch=tube_dia_inch,
+            pitch_vertical=pitch_vertical,
+            pitch_horizontal=pitch_horizontal,
+            connection_side=connection_side,
+            circle_diameter=circle_diameter,
+            tubes_per_row=tubes_per_row,
+            number_of_rows=number_of_rows,
+            number_of_circuits=number_of_circuits,
+            header_dia=header_dia,
+            blank_off_bend=blank_off_bend,
         ).sanitized()
 
         return reconstructed
 
     def _build_dimensions_from_payload(self, payload: dict) -> CoilDimensions:
         defaults = CoilDimensions()
-        values: dict[str, float] = {}
+        values: dict[str, object] = {}
 
         for field_info in fields(CoilDimensions):
             fallback = getattr(defaults, field_info.name)
             raw_value = payload.get(field_info.name, fallback)
+            if isinstance(fallback, str):
+                values[field_info.name] = str(raw_value)
+                continue
+
             try:
                 values[field_info.name] = float(raw_value)
             except (TypeError, ValueError):
