@@ -68,6 +68,13 @@ class CoilDimensions:
     number_of_circuits: float = 13.0
     header_dia: float = 170.0
     blank_off_bend: float = 12.0
+    top_feature_tube_dia: float = 15.88
+    top_feature_tube_height: float = 173.2
+    top_feature_pipe_length: float = 33.0
+    top_feature_pitch_vertical: float = 40.0
+    top_feature_pitch_horizontal: float = 34.64
+    top_feature_circle_1_dia: float = 15.88
+    top_feature_circle_2_dia: float = 14.5
 
     @property
     def fin_length(self) -> float:
@@ -155,6 +162,14 @@ class CoilDimensions:
         value.number_of_circuits = max(1.0, min(value.number_of_circuits, 100.0))
         value.header_dia = max(20.0, min(value.header_dia, 500.0))
         value.blank_off_bend = max(0.0, min(value.blank_off_bend, 200.0))
+        value.top_feature_tube_dia = max(2.0, min(value.top_feature_tube_dia, 80.0))
+        max_tube_height = max(10.0, value.core_width - (2.0 * value.right_cap_thickness))
+        value.top_feature_tube_height = max(10.0, min(value.top_feature_tube_height, max_tube_height))
+        value.top_feature_pipe_length = max(2.0, min(value.top_feature_pipe_length, 200.0))
+        value.top_feature_pitch_vertical = max(5.0, min(value.top_feature_pitch_vertical, 200.0))
+        value.top_feature_pitch_horizontal = max(5.0, min(value.top_feature_pitch_horizontal, 200.0))
+        value.top_feature_circle_1_dia = max(2.0, min(value.top_feature_circle_1_dia, 80.0))
+        value.top_feature_circle_2_dia = max(2.0, min(value.top_feature_circle_2_dia, 80.0))
 
         normalized_connection = str(value.connection_side).strip().upper()
         if normalized_connection not in {"LHS", "RHS"}:
@@ -756,11 +771,45 @@ class CoilDrawingWidget(QWidget):
         )
         painter.drawLine(QPointF(fin_start, y0), QPointF(fin_start, y0 + top_h))
 
-        painter.drawLine(QPointF(fin_end, cap_top_y), QPointF(fin_end, cap_bottom_y))
-        painter.drawLine(QPointF(fin_end, cap_top_y), QPointF(face_end, cap_top_y))
-        painter.drawLine(QPointF(fin_end, cap_bottom_y), QPointF(face_end, cap_bottom_y))
+        right_tick = max(2.0, min(dims.blank_off_bend, top_h * 0.25))
+        painter.drawLine(QPointF(fin_end, left_gap_top_y), QPointF(fin_end, left_gap_bottom_y))
+        painter.drawLine(QPointF(fin_end, left_gap_top_y), QPointF(face_end, left_gap_top_y))
+        painter.drawLine(QPointF(face_end, left_gap_top_y), QPointF(face_end, left_gap_top_y + right_tick))
+        painter.drawLine(QPointF(fin_end, left_gap_bottom_y), QPointF(face_end, left_gap_bottom_y))
+        painter.drawLine(QPointF(face_end, left_gap_bottom_y - right_tick), QPointF(face_end, left_gap_bottom_y))
 
-        nozzle_y_positions = [header_y + (header_h * 0.30), header_y + (header_h * 0.72)]
+        tube_count = max(2, int(round(dims.number_of_rows)))
+        tube_top_target = cap_top_y + dims.top_small_offset_1
+        tube_bottom_target = cap_bottom_y - dims.top_small_offset_2
+        if tube_bottom_target <= tube_top_target + 10.0:
+            mid_y = (cap_top_y + cap_bottom_y) / 2.0
+            half_span = max(20.0, (cap_bottom_y - cap_top_y - 12.0) / 2.0)
+            tube_top = mid_y - half_span
+            tube_bottom = mid_y + half_span
+        else:
+            tube_top = tube_top_target
+            tube_bottom = tube_bottom_target
+
+        feature_step = max(5.0, dims.top_feature_pitch_horizontal)
+        feature_span = feature_step * max(1, tube_count - 1)
+        available_span = max(0.0, tube_bottom - tube_top)
+        if feature_span <= available_span and tube_count > 1:
+            center_y = (tube_top + tube_bottom) / 2.0
+            tube_top = center_y - (feature_span / 2.0)
+            tube_bottom = center_y + (feature_span / 2.0)
+
+        if abs(dims.top_feature_tube_height - CoilDimensions.top_feature_tube_height) > 1e-6:
+            max_tube_height = max(10.0, cap_bottom_y - cap_top_y)
+            requested_tube_height = max(10.0, min(dims.top_feature_tube_height, max_tube_height))
+            center_y = (tube_top + tube_bottom) / 2.0
+            top_limit = cap_top_y
+            bottom_limit = cap_bottom_y - requested_tube_height
+            tube_top = min(max(center_y - (requested_tube_height / 2.0), top_limit), bottom_limit)
+            tube_bottom = tube_top + requested_tube_height
+
+        tube_step = (tube_bottom - tube_top) / max(1, tube_count - 1)
+
+        nozzle_y_positions = [tube_top, tube_bottom]
         for nozzle_y, name in zip(nozzle_y_positions, ["IN", "OUT"]):
             body_h = max(10.0, min(30.0, dims.header_dia / 9.5))
             neck_h = max(8.0, min(body_h - 2.0, body_h * 0.78))
@@ -810,20 +859,6 @@ class CoilDrawingWidget(QWidget):
         tube_pen.setStyle(Qt.PenStyle.DashLine)
         tube_pen.setDashPattern([8.0, 5.0])
         painter.setPen(tube_pen)
-
-        tube_count = 6
-        tube_top_target = cap_top_y + dims.top_small_offset_1
-        tube_bottom_target = cap_bottom_y - dims.top_small_offset_2
-        if tube_bottom_target <= tube_top_target + 10.0:
-            mid_y = (cap_top_y + cap_bottom_y) / 2.0
-            half_span = max(20.0, (cap_bottom_y - cap_top_y - 12.0) / 2.0)
-            tube_top = mid_y - half_span
-            tube_bottom = mid_y + half_span
-        else:
-            tube_top = tube_top_target
-            tube_bottom = tube_bottom_target
-
-        tube_step = (tube_bottom - tube_top) / max(1, tube_count - 1)
         tube_ys: list[float] = []
         for tube_index in range(tube_count):
             y_tube = tube_top + (tube_index * tube_step)
@@ -841,18 +876,35 @@ class CoilDrawingWidget(QWidget):
             y_top = min(y_a, y_b)
             y_mid = (y_a + y_b) / 2.0
 
-            tube_wall_visual = max(2.0, min(6.0, dims.tube_dia_inch * 7.36))
+            tube_wall_visual = max(2.0, min(6.0, dims.top_feature_tube_dia * 0.22))
             wall_thickness = min(tube_wall_visual, loop_dia * 0.28)
             outer_dia = loop_dia + wall_thickness
             inner_dia = max(2.0, loop_dia - wall_thickness)
 
-            outer_w = max(2.0, min(outer_dia, max_arc_width))
-            inner_w = max(1.4, min(inner_dia, outer_w - 1.0, max_arc_width))
+            outer_w_target = max(2.0, dims.top_feature_circle_1_dia)
+            inner_w_target = max(1.4, min(dims.top_feature_circle_2_dia, outer_w_target - 0.6))
+
+            outer_w = max(2.0, min(outer_w_target, max_arc_width))
+            inner_w = max(1.4, min(inner_w_target, outer_w - 0.6, max_arc_width))
             flow_w = max(1.2, min((outer_w + inner_w) / 2.0, max_arc_width))
 
-            loop_rect_outer = QRectF(fin_end - (outer_w / 2.0), y_mid - (outer_dia / 2.0), outer_w, outer_dia)
-            loop_rect_inner = QRectF(fin_end - (inner_w / 2.0), y_mid - (inner_dia / 2.0), inner_w, inner_dia)
-            loop_rect_flow = QRectF(fin_end - (flow_w / 2.0), y_top, flow_w, loop_dia)
+            max_pipe_len = max(2.0, right_clearance - 1.0)
+            neck_len = min(max(2.0, dims.top_feature_pipe_length), max_pipe_len)
+            bend_axis_x = min(face_end - 1.0, fin_end + neck_len)
+
+            outer_top_y = y_mid - (outer_dia / 2.0)
+            outer_bottom_y = y_mid + (outer_dia / 2.0)
+            inner_top_y = y_mid - (inner_dia / 2.0)
+            inner_bottom_y = y_mid + (inner_dia / 2.0)
+
+            painter.drawLine(QPointF(fin_end, outer_top_y), QPointF(bend_axis_x, outer_top_y))
+            painter.drawLine(QPointF(fin_end, outer_bottom_y), QPointF(bend_axis_x, outer_bottom_y))
+            painter.drawLine(QPointF(fin_end, inner_top_y), QPointF(bend_axis_x, inner_top_y))
+            painter.drawLine(QPointF(fin_end, inner_bottom_y), QPointF(bend_axis_x, inner_bottom_y))
+
+            loop_rect_outer = QRectF(bend_axis_x - (outer_w / 2.0), y_mid - (outer_dia / 2.0), outer_w, outer_dia)
+            loop_rect_inner = QRectF(bend_axis_x - (inner_w / 2.0), y_mid - (inner_dia / 2.0), inner_w, inner_dia)
+            loop_rect_flow = QRectF(bend_axis_x - (flow_w / 2.0), y_top, flow_w, loop_dia)
 
             painter.drawArc(loop_rect_outer, 90 * 16, -180 * 16)
             painter.drawArc(loop_rect_inner, 90 * 16, -180 * 16)
@@ -890,25 +942,37 @@ class CoilDrawingWidget(QWidget):
         self._draw_dim_h(painter, fin_end, face_end, y0 + top_h, 48.0, f"{dims.right_panel_width:.0f}")
 
         self._draw_dim_v(painter, left_gap_top_y, left_gap_bottom_y, fin_start, -48.0, f"{top_h:.0f}")
-        self._draw_dim_v(painter, y0, y0 + top_h, face_end, 50.0, f"{top_h:.0f}")
+        self._draw_dim_v(painter, y0, y0 + top_h, face_end, 88.0, f"{top_h:.0f}", text_vertical=True)
         self._draw_dim_v(
             painter,
             y0,
             y0 + dims.right_cap_thickness,
             face_end,
-            89.0,
+            52.0,
             f"{dims.right_cap_thickness:.0f}",
             arrows_inside=True,
             arrow_size=4.8,
+            text_vertical=True,
         )
-        self._draw_dim_v(painter, cap_top_y, tube_ys[0], fin_end, 40.0, f"{dims.top_small_offset_1:.1f}")
+        top_offset_1 = max(0.0, tube_ys[0] - cap_top_y)
+        top_offset_2 = max(0.0, cap_bottom_y - tube_ys[-1])
+        self._draw_dim_v(
+            painter,
+            cap_top_y,
+            tube_ys[0],
+            fin_end,
+            -118.0,
+            f"{top_offset_1:.1f}",
+            text_vertical=True,
+        )
         self._draw_dim_v(
             painter,
             tube_ys[-1],
             cap_bottom_y,
             fin_end,
-            40.0,
-            f"{dims.top_small_offset_2:.1f}",
+            -118.0,
+            f"{top_offset_2:.1f}",
+            text_vertical=True,
         )
 
         painter.setPen(object_pen)
@@ -1083,8 +1147,8 @@ class CoilDrawingWidget(QWidget):
         rows_in_width = max(1, int(round(dims.number_of_rows)))
         tubes_per_row = max(1, int(round(dims.tubes_per_row)))
 
-        requested_horizontal_pitch = max(5.0, dims.pitch_horizontal)
-        requested_vertical_pitch = max(5.0, dims.pitch_vertical)
+        requested_horizontal_pitch = max(5.0, dims.top_feature_pitch_horizontal)
+        requested_vertical_pitch = max(5.0, dims.top_feature_pitch_vertical)
 
         available_w = max(20.0, w - 28.0)
         available_h = max(60.0, h - 28.0)
@@ -1367,6 +1431,69 @@ class MainWindow(QMainWindow):
         )
         self._add_spin(form, "top_small_offset_1", "Top Small Offset 1", self.default_dims.top_small_offset_1, 5, 500)
         self._add_spin(form, "top_small_offset_2", "Top Small Offset 2", self.default_dims.top_small_offset_2, 5, 500)
+        self._add_spin(
+            form,
+            "top_feature_tube_dia",
+            "Feature Tube Dia",
+            self.default_dims.top_feature_tube_dia,
+            2.0,
+            80.0,
+            decimals=2,
+        )
+        self._add_spin(
+            form,
+            "top_feature_tube_height",
+            "Feature Tube Height",
+            self.default_dims.top_feature_tube_height,
+            10.0,
+            400.0,
+            decimals=2,
+        )
+        self._add_spin(
+            form,
+            "top_feature_pipe_length",
+            "Feature Pipe Length",
+            self.default_dims.top_feature_pipe_length,
+            2.0,
+            200.0,
+            decimals=2,
+        )
+        self._add_spin(
+            form,
+            "top_feature_pitch_vertical",
+            "Feature Pitch Vertical",
+            self.default_dims.top_feature_pitch_vertical,
+            5.0,
+            200.0,
+            decimals=2,
+        )
+        self._add_spin(
+            form,
+            "top_feature_pitch_horizontal",
+            "Feature Pitch Horizontal",
+            self.default_dims.top_feature_pitch_horizontal,
+            5.0,
+            200.0,
+            decimals=2,
+        )
+        self._add_spin(
+            form,
+            "top_feature_circle_1_dia",
+            "Feature Circle 1 Dia",
+            self.default_dims.top_feature_circle_1_dia,
+            2.0,
+            80.0,
+            decimals=2,
+        )
+        self._add_spin(
+            form,
+            "top_feature_circle_2_dia",
+            "Feature Circle 2 Dia",
+            self.default_dims.top_feature_circle_2_dia,
+            2.0,
+            80.0,
+            decimals=2,
+        )
         return group
 
     def _build_front_group(self) -> QGroupBox:
@@ -1585,6 +1712,13 @@ class MainWindow(QMainWindow):
             number_of_circuits=self._spin_boxes["number_of_circuits"].value(),
             header_dia=self._spin_boxes["header_dia"].value(),
             blank_off_bend=self._spin_boxes["blank_off_bend"].value(),
+            top_feature_tube_dia=self._spin_boxes["top_feature_tube_dia"].value(),
+            top_feature_tube_height=self._spin_boxes["top_feature_tube_height"].value(),
+            top_feature_pipe_length=self._spin_boxes["top_feature_pipe_length"].value(),
+            top_feature_pitch_vertical=self._spin_boxes["top_feature_pitch_vertical"].value(),
+            top_feature_pitch_horizontal=self._spin_boxes["top_feature_pitch_horizontal"].value(),
+            top_feature_circle_1_dia=self._spin_boxes["top_feature_circle_1_dia"].value(),
+            top_feature_circle_2_dia=self._spin_boxes["top_feature_circle_2_dia"].value(),
         )
 
     def _apply_changes(self) -> None:
@@ -1652,6 +1786,13 @@ class MainWindow(QMainWindow):
             "number_of_circuits": dims.number_of_circuits,
             "header_dia": dims.header_dia,
             "blank_off_bend": dims.blank_off_bend,
+            "top_feature_tube_dia": dims.top_feature_tube_dia,
+            "top_feature_tube_height": dims.top_feature_tube_height,
+            "top_feature_pipe_length": dims.top_feature_pipe_length,
+            "top_feature_pitch_vertical": dims.top_feature_pitch_vertical,
+            "top_feature_pitch_horizontal": dims.top_feature_pitch_horizontal,
+            "top_feature_circle_1_dia": dims.top_feature_circle_1_dia,
+            "top_feature_circle_2_dia": dims.top_feature_circle_2_dia,
         }
 
         self._is_syncing_inputs = True
