@@ -1099,7 +1099,6 @@ class CoilDrawingWidget(QWidget):
 
         painter.setPen(object_pen)
         self._draw_underlined_label(painter, QRectF(face_left, y + h + 120.0, face_w, 30.0), "FRONT")
-
     def _draw_side_view(
         self,
         painter: QPainter,
@@ -1127,19 +1126,15 @@ class CoilDrawingWidget(QWidget):
         painter.drawRect(QRectF(x, y, w, h))
 
         # ───────────────────────────────────────────────────────────────
-        # 2. Calculate tube matrix parameters (same as before)
+        # 2. Calculate tube matrix parameters – using user input directly
         # ───────────────────────────────────────────────────────────────
         rows_in_width = max(1, int(round(dims.number_of_rows)))
         tubes_per_row = max(1, int(round(dims.tubes_per_row)))
 
-        requested_horizontal_pitch = max(5.0, dims.top_feature_pitch_horizontal)
-        requested_vertical_pitch   = max(5.0, dims.top_feature_pitch_vertical)
-
-        available_w = max(20.0, w - 28.0)
-        available_h = max(60.0, h - 28.0)
-
-        horizontal_pitch = min(requested_horizontal_pitch, available_w / max(1, rows_in_width))
-        vertical_pitch   = min(requested_vertical_pitch, available_h / max(1.0, tubes_per_row - 0.25))
+        # ────── ONLY THIS PART CHANGED ──────
+        horizontal_pitch = dims.pitch_horizontal
+        vertical_pitch   = dims.pitch_vertical
+        # ─────────────────────────────────────
 
         matrix_w = rows_in_width * horizontal_pitch
         matrix_h = (tubes_per_row - 0.25) * vertical_pitch   # approximate height
@@ -1156,7 +1151,6 @@ class CoilDrawingWidget(QWidget):
 
         # ───────────────────────────────────────────────────────────────
         # 3. Calculate REAL min/max positions of all circle centers
-        #    (important because of staggering)
         # ───────────────────────────────────────────────────────────────
         min_cx = float('inf')
         max_cx = float('-inf')
@@ -1196,6 +1190,7 @@ class CoilDrawingWidget(QWidget):
         # ───────────────────────────────────────────────────────────────
         # 4. Inner rectangle — based on real tube bounds + clearance
         # ───────────────────────────────────────────────────────────────
+        
         clearance = hole_radius + 6.0   # adjust this value if needed (5–10 mm)
 
         inner_left   = x + min_cx - clearance
@@ -1284,6 +1279,7 @@ class CoilDrawingWidget(QWidget):
 
         painter.setPen(object_pen)
         painter.drawText(QRectF(x, y + h + 79.0, w, 30.0), Qt.AlignmentFlag.AlignCenter, label)
+
     def _draw_underlined_label(self, painter: QPainter, rect: QRectF, text: str) -> None:
         painter.save()
         painter.setPen(QPen(self.OBJECT_COLOR, self.OBJECT_LINE_WIDTH))
