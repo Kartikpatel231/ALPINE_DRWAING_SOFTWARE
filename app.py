@@ -1117,62 +1117,110 @@ class CoilDrawingWidget(QWidget):
             return x + (w - local_x if mirror else local_x)
 
         object_pen = QPen(self.OBJECT_COLOR, self.OBJECT_LINE_WIDTH)
+        inner_rect_pen = QPen(QColor("#222222"), 2.0)  # solid dark line
+
+        # ───────────────────────────────────────────────────────────────
+        # 1. Outer full casing rectangle
+        # ───────────────────────────────────────────────────────────────
         painter.setPen(object_pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(QRectF(x, y, w, h))
 
-        magenta_pen = QPen(self.MAGENTA, 1.1)
-        magenta_pen.setStyle(Qt.PenStyle.DashLine)
-        magenta_pen.setDashPattern([8.0, 5.0])
-        painter.setPen(magenta_pen)
-        band_margin_x = 8.0
-        band_offset_y = 7.0
-        painter.drawLine(
-            QPointF(map_x(band_margin_x), y + band_offset_y),
-            QPointF(map_x(w - band_margin_x), y + band_offset_y),
-        )
-        painter.drawLine(
-            QPointF(map_x(band_margin_x), y + h - band_offset_y),
-            QPointF(map_x(w - band_margin_x), y + h - band_offset_y),
-        )
-
-        painter.setPen(QPen(self.OBJECT_COLOR, 1.2))
-        frame_hole_radius = 2.9
-        base_frame_holes = [8.0, 44.0, 98.0, 160.0, 222.0, 276.0, 312.0]
-        frame_hole_positions = [(value / 320.0) * w for value in base_frame_holes]
-        for hole_x in frame_hole_positions:
-            painter.drawEllipse(QPointF(map_x(hole_x), y + 8.0), frame_hole_radius, frame_hole_radius)
-            painter.drawEllipse(QPointF(map_x(hole_x), y + h - 8.0), frame_hole_radius, frame_hole_radius)
-
+        # ───────────────────────────────────────────────────────────────
+        # 2. Calculate tube matrix parameters (same as before)
+        # ───────────────────────────────────────────────────────────────
         rows_in_width = max(1, int(round(dims.number_of_rows)))
         tubes_per_row = max(1, int(round(dims.tubes_per_row)))
 
         requested_horizontal_pitch = max(5.0, dims.top_feature_pitch_horizontal)
-        requested_vertical_pitch = max(5.0, dims.top_feature_pitch_vertical)
+        requested_vertical_pitch   = max(5.0, dims.top_feature_pitch_vertical)
 
         available_w = max(20.0, w - 28.0)
         available_h = max(60.0, h - 28.0)
+
         horizontal_pitch = min(requested_horizontal_pitch, available_w / max(1, rows_in_width))
-        vertical_pitch = min(requested_vertical_pitch, available_h / max(1.0, tubes_per_row - 0.25))
+        vertical_pitch   = min(requested_vertical_pitch, available_h / max(1.0, tubes_per_row - 0.25))
 
         matrix_w = rows_in_width * horizontal_pitch
-        matrix_h = (tubes_per_row - 0.25) * vertical_pitch
+        matrix_h = (tubes_per_row - 0.25) * vertical_pitch   # approximate height
 
         hole_box_left = max(14.0, (w - matrix_w) / 2.0)
-        hole_box_top = max(14.0, (h - matrix_h) / 2.0)
+        hole_box_top  = max(14.0, (h - matrix_h) / 2.0)
 
         effective_dia_limit = min(horizontal_pitch, vertical_pitch) * 0.86
         hole_diameter = max(2.0, min(dims.circle_diameter, effective_dia_limit))
         hole_radius = hole_diameter / 2.0
 
-        # First center from top-left of hole matrix => (HP/2, VP/4).
         first_center_x = hole_box_left + (horizontal_pitch * 0.5)
         first_center_y = hole_box_top + (vertical_pitch * 0.25)
+
+        # ───────────────────────────────────────────────────────────────
+        # 3. Calculate REAL min/max positions of all circle centers
+        #    (important because of staggering)
+        # ───────────────────────────────────────────────────────────────
+        min_cx = float('inf')
+        max_cx = float('-inf')
+        min_cy = float('inf')
+        max_cy = float('-inf')
 
         for row_index in range(rows_in_width):
             row_center_x = first_center_x + (row_index * horizontal_pitch)
 
-            # Steps-6/7: alternate row starts by +VP/2 then -VP/2.
+            if row_index % 2 == 0:
+                row_start_y = first_center_y
+            else:
+                row_start_y = first_center_y + (vertical_pitch * 0.5)
+
+            for tube_index in range(tubes_per_row):
+                hole_y = row_start_y + (tube_index * vertical_pitch)
+
+                # Only consider valid positions (same check as drawing)
+                if hole_y > (hole_box_top + matrix_h + 0.001):
+                    continue
+
+                cx = row_center_x
+                cy = hole_y
+
+                min_cx = min(min_cx, cx)
+                max_cx = max(max_cx, cx)
+                min_cy = min(min_cy, cy)
+                max_cy = max(max_cy, cy)
+
+        # If no tubes were found (unlikely), fallback to approximate
+        if min_cx == float('inf'):
+            min_cx = hole_box_left
+            max_cx = hole_box_left + matrix_w
+            min_cy = hole_box_top
+            max_cy = hole_box_top + matrix_h
+
+        # ───────────────────────────────────────────────────────────────
+        # 4. Inner rectangle — based on real tube bounds + clearance
+        # ───────────────────────────────────────────────────────────────
+        clearance = hole_radius + 6.0   # adjust this value if needed (5–10 mm)
+
+        inner_left   = x + min_cx - clearance
+        inner_right  = x + max_cx + clearance
+        inner_top    = y + min_cy - clearance
+        inner_bottom = y + max_cy + clearance
+
+        # Prevent going outside casing or negative size
+        inner_left   = max(x + 5, inner_left)
+        inner_right  = min(x + w - 5, inner_right)
+        inner_top    = max(y + 5, inner_top)
+        inner_bottom = min(y + h - 5, inner_bottom)
+
+        painter.setPen(inner_rect_pen)
+        painter.drawRect(QRectF(inner_left, inner_top,
+                                inner_right - inner_left,
+                                inner_bottom - inner_top))
+
+        # ───────────────────────────────────────────────────────────────
+        # 5. Draw the tube circles (unchanged)
+        # ───────────────────────────────────────────────────────────────
+        painter.setPen(QPen(self.OBJECT_COLOR, 1.0))  # thin for circles
+        for row_index in range(rows_in_width):
+            row_center_x = first_center_x + (row_index * horizontal_pitch)
+
             if row_index % 2 == 0:
                 row_start_y = first_center_y
             else:
@@ -1184,6 +1232,39 @@ class CoilDrawingWidget(QWidget):
                     continue
                 painter.drawEllipse(QPointF(map_x(row_center_x), y + hole_y), hole_radius, hole_radius)
 
+        # ───────────────────────────────────────────────────────────────
+        # 6. Dashed bands (kept)
+        # ───────────────────────────────────────────────────────────────
+        magenta_pen = QPen(self.MAGENTA, 1.1)
+        magenta_pen.setStyle(Qt.PenStyle.DashLine)
+        magenta_pen.setDashPattern([8.0, 5.0])
+        painter.setPen(magenta_pen)
+
+        band_margin_x = 8.0
+        band_offset_y = 7.0
+        painter.drawLine(
+            QPointF(map_x(band_margin_x), y + band_offset_y),
+            QPointF(map_x(w - band_margin_x), y + band_offset_y),
+        )
+        painter.drawLine(
+            QPointF(map_x(band_margin_x), y + h - band_offset_y),
+            QPointF(map_x(w - band_margin_x), y + h - band_offset_y),
+        )
+
+        # ───────────────────────────────────────────────────────────────
+        # 7. Mounting holes (unchanged)
+        # ───────────────────────────────────────────────────────────────
+        painter.setPen(QPen(self.OBJECT_COLOR, 1.2))
+        frame_hole_radius = 2.9
+        base_frame_holes = [8.0, 44.0, 98.0, 160.0, 222.0, 276.0, 312.0]
+        frame_hole_positions = [(value / 320.0) * w for value in base_frame_holes]
+        for hole_x in frame_hole_positions:
+            painter.drawEllipse(QPointF(map_x(hole_x), y + 8.0), frame_hole_radius, frame_hole_radius)
+            painter.drawEllipse(QPointF(map_x(hole_x), y + h - 8.0), frame_hole_radius, frame_hole_radius)
+
+        # ───────────────────────────────────────────────────────────────
+        # 8. Dimensions & label (unchanged)
+        # ───────────────────────────────────────────────────────────────
         self._draw_dim_h(painter, x, x + w, y + h, 45.0, f"{w:.0f}")
 
         if show_vertical_dims:
@@ -1203,7 +1284,6 @@ class CoilDrawingWidget(QWidget):
 
         painter.setPen(object_pen)
         painter.drawText(QRectF(x, y + h + 79.0, w, 30.0), Qt.AlignmentFlag.AlignCenter, label)
-
     def _draw_underlined_label(self, painter: QPainter, rect: QRectF, text: str) -> None:
         painter.save()
         painter.setPen(QPen(self.OBJECT_COLOR, self.OBJECT_LINE_WIDTH))
