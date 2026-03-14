@@ -88,6 +88,10 @@ class CoilDimensions:
     def top_lead_span(self) -> float:
         return self.top_total_length - self.front_total_width + self.left_panel_width
 
+    @property
+    def calculated_total_height(self) -> float:
+        return (self.tubes_per_row * self.pitch_vertical) + self.top_plate + self.bottom_plate
+
     def sanitized(self) -> "CoilDimensions":
         value = replace(self)
         value.top_total_length = max(500.0, value.top_total_length)
@@ -687,7 +691,8 @@ class CoilDrawingWidget(QWidget):
         front_y = top_view_y + dims.core_width + 265.0
         right_side_x = front_x + front_total_draw_w + gap
 
-        top_x = front_face_left + ((dims.front_total_width - dims.top_total_length) / 2.0)
+        # Align top-view right edge with front-view outer-right edge
+        top_x = (front_x + front_total_draw_w) - dims.top_total_length
 
         world_w = right_side_x + dims.core_width + 90.0
         world_h = front_y + dims.front_total_height + 240.0
@@ -706,11 +711,12 @@ class CoilDrawingWidget(QWidget):
     def _draw_scene(self, painter: QPainter, layout: dict[str, float]) -> None:
         self._draw_top_view(painter, layout)
         self._draw_front_view(painter, layout)
+        self._draw_notes_block(painter, layout)
         self._draw_side_view(
             painter,
             x=layout["left_side_x"],
             y=layout["front_y"],
-            label="HEADER SIDE",
+            label="RETURN END SIDE",
             show_vertical_dims=False,
             mirror=False,
         )
@@ -718,7 +724,7 @@ class CoilDrawingWidget(QWidget):
             painter,
             x=layout["right_side_x"],
             y=layout["front_y"],
-            label="RETURN END SIDE",
+            label="HEADER SIDE",
             show_vertical_dims=True,
             mirror=True,
         )
@@ -982,36 +988,62 @@ class CoilDrawingWidget(QWidget):
         dims = self._dims
         x = layout["front_x"]
         y = layout["front_y"]
-        face_w = dims.front_total_width
-        left_extension = max(0.0, dims.front_header_band_width - dims.left_panel_width)
-        total_w = left_extension + face_w
-        h = dims.front_total_height
-        face_left = x + left_extension
-        face_right = face_left + face_w
 
-        inner_x = x + dims.front_header_band_width
-        inner_y = y + dims.top_plate
-        inner_right_x = face_right - dims.right_panel_width
-        inner_w = max(20.0, inner_right_x - inner_x)
-        inner_h = dims.fin_height
+        # Table-driven front inputs
+        fin_w = max(20.0, dims.fin_length)
+        total_h = dims.front_total_height
+        top_plate = dims.top_plate
+        bottom_plate = dims.bottom_plate
+        header_side_w = dims.left_panel_width   # 35 in reference
+        return_side_w = dims.right_panel_width  # 65 in reference
+        blank_off_w = max(header_side_w, min(dims.front_header_band_width, header_side_w + fin_w))
+        left_extension_w = max(0.0, blank_off_w - header_side_w)
+
+        outer_left = x
+        outer_top = y
+        outer_bottom = outer_top + total_h
+
+        face_left = outer_left + left_extension_w
+        fin_left = outer_left + blank_off_w
+        fin_right = fin_left + fin_w
+        outer_right = fin_right + return_side_w
+
+        fin_top = outer_top + top_plate
+        fin_bottom = outer_bottom - bottom_plate
+        fin_h = max(0.0, fin_bottom - fin_top)
 
         object_pen = QPen(self.OBJECT_COLOR, self.OBJECT_LINE_WIDTH)
         painter.setPen(object_pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
-        painter.drawRect(QRectF(x, y, total_w, h))
-        inner_bottom_y = inner_y + inner_h
+        # Outer frame
+        painter.drawRect(QRectF(outer_left, outer_top, outer_right - outer_left, total_h))
 
-        painter.drawLine(QPointF(face_left, y), QPointF(face_left, y + h))
-        painter.drawLine(QPointF(inner_x, y), QPointF(inner_x, y + h))
-        painter.drawLine(QPointF(inner_right_x, y), QPointF(inner_right_x, y + h))
-        painter.drawLine(QPointF(inner_x, inner_y), QPointF(inner_right_x, inner_y))
-        painter.drawLine(QPointF(inner_x, inner_bottom_y), QPointF(inner_right_x, inner_bottom_y))
+        # Left side plate strip (35) and right side plate (65)
+        painter.drawRect(QRectF(face_left, outer_top, header_side_w, total_h))
+        painter.drawRect(QRectF(fin_right, outer_top, return_side_w, total_h))
 
-        center_x = inner_x + (inner_w * 0.52)
-        center_y = inner_y + (inner_h * 0.58)
-        ellipse_w = 190.0
-        ellipse_h = 90.0
+        # Blank-off section measured from outer-left to second edge (185)
+        painter.drawRect(QRectF(outer_left, outer_top, blank_off_w, total_h))
+
+        # Top and bottom plates over fin length
+        painter.drawRect(QRectF(fin_left, outer_top, fin_w, top_plate))
+        painter.drawRect(QRectF(fin_left, outer_bottom - bottom_plate, fin_w, bottom_plate))
+
+        # Key edges
+        blank_right_x = fin_left
+        painter.drawLine(QPointF(face_left, outer_top), QPointF(face_left, outer_bottom))
+        painter.drawLine(QPointF(fin_left, outer_top), QPointF(fin_left, outer_bottom))
+        painter.drawLine(QPointF(fin_right, outer_top), QPointF(fin_right, outer_bottom))
+        painter.drawLine(QPointF(fin_left, fin_top), QPointF(fin_right, fin_top))
+        painter.drawLine(QPointF(fin_left, fin_bottom), QPointF(fin_right, fin_bottom))
+
+        # Step 8 — Ellipse center fixed at:
+        # X = FinLength/2, Y = TotalHeight/2
+        center_x = fin_left + (fin_w / 2.0)
+        center_y = outer_top + (total_h / 2.0)
+        ellipse_w = max(90.0, min(280.0, fin_w * 0.42))
+        ellipse_h = max(50.0, min(170.0, max(1.0, fin_h) * 0.32))
         ellipse_rotation = 35.0
 
         ellipse_base = QPainterPath()
@@ -1025,18 +1057,17 @@ class CoilDrawingWidget(QWidget):
         painter.setPen(QPen(self.OBJECT_COLOR, 1.8))
         painter.drawPath(ellipse_path)
 
+        # Step 9 — FPI lines: vertical & evenly spaced
         painter.setClipPath(ellipse_path)
         painter.setPen(QPen(self.ACCENT_GREEN, 1.5))
-        hatch_count = 8
-        hatch_span = ellipse_w * 0.74
-        hatch_start_x = center_x - (hatch_span / 2.0)
-        hatch_step = hatch_span / max(1, hatch_count - 1)
-        for hatch_index in range(hatch_count):
-            hatch_x = hatch_start_x + (hatch_index * hatch_step)
-            painter.drawLine(
-                QPointF(hatch_x, center_y - (ellipse_h * 0.95)),
-                QPointF(hatch_x, center_y + (ellipse_h * 0.95)),
-            )
+        fin_pitch = 25.4 / max(1.0, dims.fpi)
+        line_x = center_x - (ellipse_w / 2.0)
+        line_x_end = center_x + (ellipse_w / 2.0)
+        line_count = 0
+        while line_x <= line_x_end and line_count < 4000:
+            painter.drawLine(QPointF(line_x, fin_top), QPointF(line_x, fin_bottom))
+            line_x += fin_pitch
+            line_count += 1
         painter.restore()
 
         painter.setPen(object_pen)
@@ -1053,52 +1084,61 @@ class CoilDrawingWidget(QWidget):
         painter.save()
         painter.setPen(QPen(self.DIM_COLOR, self.DIM_LINE_WIDTH))
         painter.drawLine(leader_start, leader_tip)
-        self._draw_arrow_head(painter, leader_tip, (leader_tip.x() - leader_start.x(), leader_tip.y() - leader_start.y()), 6.2)
+        self._draw_arrow_head(
+            painter,
+            leader_tip,
+            (leader_tip.x() - leader_start.x(), leader_tip.y() - leader_start.y()),
+            6.2,
+        )
         painter.restore()
 
-        self._draw_internal_dim_h(
-            painter,
-            x,
-            inner_x,
-            y + 185.0,
-            f"{dims.front_header_band_width:.0f}",
-        )
-        self._draw_dim_h(painter, face_left, inner_x, y + h, 45.0, f"{dims.left_panel_width:.0f}")
-        self._draw_dim_h(painter, inner_x, inner_x + inner_w, y + h, 45.0, f"{inner_w:.0f} (FL)")
-        self._draw_dim_h(painter, inner_x + inner_w, face_right, y + h, 45.0, f"{dims.right_panel_width:.0f}")
-        self._draw_dim_h(painter, face_left, face_right, y + h, 82.0, f"{face_w:.0f}")
+        # Step 10 — Dimensioning
+        if blank_off_w > 0.001:
+            self._draw_internal_dim_h(
+                painter,
+                outer_left,
+                blank_right_x,
+                y + min(165.0, total_h * 0.32),
+                f"{blank_off_w:.0f}",
+            )
+
+        self._draw_dim_h(painter, face_left, fin_left, outer_bottom, 45.0, f"{header_side_w:.0f}")
+        self._draw_dim_h(painter, fin_left, fin_right, outer_bottom, 45.0, f"{fin_w:.0f} (FL)")
+        self._draw_dim_h(painter, fin_right, outer_right, outer_bottom, 45.0, f"{return_side_w:.0f}")
+        self._draw_dim_h(painter, face_left, outer_right, outer_bottom, 82.0, f"{dims.front_total_width:.0f}")
 
         self._draw_dim_v(
             painter,
-            inner_y,
-            inner_y + inner_h,
-            face_right,
+            fin_top,
+            fin_bottom,
+            outer_right,
             50.0,
-            f"{inner_h:.0f} (FH)",
+            f"{fin_h:.0f} (FH)",
             text_vertical=True,
         )
-        self._draw_dim_v(painter, y, y + h, face_right, 90.0, f"{h:.0f}", text_vertical=True)
+        self._draw_dim_v(painter, outer_top, outer_bottom, outer_right, 90.0, f"{total_h:.0f}", text_vertical=True)
         self._draw_dim_v(
             painter,
-            y,
-            y + dims.top_plate,
-            face_right,
+            outer_top,
+            outer_top + top_plate,
+            outer_right,
             129.0,
-            f"{dims.top_plate:.0f}",
+            f"{top_plate:.0f}",
             text_vertical=True,
         )
         self._draw_dim_v(
             painter,
-            y + h - dims.bottom_plate,
-            y + h,
-            face_right,
+            outer_bottom - bottom_plate,
+            outer_bottom,
+            outer_right,
             129.0,
-            f"{dims.bottom_plate:.0f}",
+            f"{bottom_plate:.0f}",
             text_vertical=True,
         )
 
+        # Step 11 — View label
         painter.setPen(object_pen)
-        self._draw_underlined_label(painter, QRectF(face_left, y + h + 120.0, face_w, 30.0), "FRONT")
+        self._draw_underlined_label(painter, QRectF(outer_left, outer_bottom + 120.0, outer_right - outer_left, 30.0), "FRONT")
 
     def _draw_side_view(
         self,
@@ -1111,15 +1151,56 @@ class CoilDrawingWidget(QWidget):
     ) -> None:
         dims = self._dims
         w = dims.core_width
-        h = dims.front_total_height
+        rows_in_width = max(1, int(round(dims.number_of_rows)))
+        tubes_per_row = max(1, int(round(dims.tubes_per_row)))
+        horizontal_pitch = max(5.0, dims.pitch_horizontal)
+        vertical_pitch = max(5.0, dims.pitch_vertical)
+
+        tube_layout_w = rows_in_width * horizontal_pitch
+        tube_layout_h = max(0.0, (tubes_per_row - 1) * vertical_pitch)
+
+        # Step 1: main header box
+        # Height = ((TPR - 1) × Vertical Pitch) + Top Plate + Bottom Plate
+        h = tube_layout_h + dims.top_plate + dims.bottom_plate
 
         def map_x(local_x: float) -> float:
             return x + (w - local_x if mirror else local_x)
 
         object_pen = QPen(self.OBJECT_COLOR, self.OBJECT_LINE_WIDTH)
+        inner_rect_pen = QPen(QColor("#222222"), 1.8)
+
         painter.setPen(object_pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(QRectF(x, y, w, h))
+
+        # Step 2 & 3: bottom/top plate offsets
+        top_offset_y = y + dims.top_plate
+        bottom_offset_y = y + h - dims.bottom_plate
+        painter.setPen(QPen(self.OBJECT_COLOR, 1.0))
+        painter.drawLine(QPointF(map_x(0.0), top_offset_y), QPointF(map_x(w), top_offset_y))
+        painter.drawLine(QPointF(map_x(0.0), bottom_offset_y), QPointF(map_x(w), bottom_offset_y))
+
+        # Step 4: tube layout box (bottom aligned with bottom offset)
+        tube_box_left_local = (w - tube_layout_w) / 2.0
+        tube_box_top_local = h - dims.bottom_plate - tube_layout_h
+        tube_box_x1 = map_x(tube_box_left_local)
+        tube_box_x2 = map_x(tube_box_left_local + tube_layout_w)
+        painter.setPen(inner_rect_pen)
+        painter.drawRect(
+            QRectF(
+                min(tube_box_x1, tube_box_x2),
+                y + tube_box_top_local,
+                tube_layout_w,
+                tube_layout_h,
+            )
+        )
+
+        # Step 5~8: first center, vertical generation, horizontal generation, stagger
+        dia_limit = min(horizontal_pitch, vertical_pitch) * 0.90
+        circle_1_dia = max(2.0, min(dims.top_feature_circle_1_dia, dia_limit))
+        circle_2_dia = max(2.0, min(dims.top_feature_circle_2_dia, dia_limit))
+        circle_1_radius = circle_1_dia / 2.0
+        circle_2_radius = circle_2_dia / 2.0
 
         magenta_pen = QPen(self.MAGENTA, 1.1)
         magenta_pen.setStyle(Qt.PenStyle.DashLine)
@@ -1136,59 +1217,34 @@ class CoilDrawingWidget(QWidget):
             QPointF(map_x(w - band_margin_x), y + h - band_offset_y),
         )
 
-        painter.setPen(QPen(self.OBJECT_COLOR, 1.2))
-        frame_hole_radius = 2.9
-        base_frame_holes = [8.0, 44.0, 98.0, 160.0, 222.0, 276.0, 312.0]
-        frame_hole_positions = [(value / 320.0) * w for value in base_frame_holes]
-        for hole_x in frame_hole_positions:
-            painter.drawEllipse(QPointF(map_x(hole_x), y + 8.0), frame_hole_radius, frame_hole_radius)
-            painter.drawEllipse(QPointF(map_x(hole_x), y + h - 8.0), frame_hole_radius, frame_hole_radius)
-
-        rows_in_width = max(1, int(round(dims.number_of_rows)))
-        tubes_per_row = max(1, int(round(dims.tubes_per_row)))
-
-        requested_horizontal_pitch = max(5.0, dims.top_feature_pitch_horizontal)
-        requested_vertical_pitch = max(5.0, dims.top_feature_pitch_vertical)
-
-        available_w = max(20.0, w - 28.0)
-        available_h = max(60.0, h - 28.0)
-        horizontal_pitch = min(requested_horizontal_pitch, available_w / max(1, rows_in_width))
-        vertical_pitch = min(requested_vertical_pitch, available_h / max(1.0, tubes_per_row - 0.25))
-
-        matrix_w = rows_in_width * horizontal_pitch
-        matrix_h = (tubes_per_row - 0.25) * vertical_pitch
-
-        hole_box_left = max(14.0, (w - matrix_w) / 2.0)
-        hole_box_top = max(14.0, (h - matrix_h) / 2.0)
-
-        effective_dia_limit = min(horizontal_pitch, vertical_pitch) * 0.86
-        hole_diameter = max(2.0, min(dims.circle_diameter, effective_dia_limit))
-        hole_radius = hole_diameter / 2.0
-
-        # First center from top-left of hole matrix => (HP/2, VP/4).
-        first_center_x = hole_box_left + (horizontal_pitch * 0.5)
-        first_center_y = hole_box_top + (vertical_pitch * 0.25)
+        first_center_x = tube_box_left_local + (horizontal_pitch * 0.5)
+        y_start_from_bottom = dims.bottom_plate + (vertical_pitch * 0.5)
+        y_bottom_limit = dims.bottom_plate
+        y_top_limit = h - dims.top_plate
 
         for row_index in range(rows_in_width):
             row_center_x = first_center_x + (row_index * horizontal_pitch)
-
-            # Steps-6/7: alternate row starts by +VP/2 then -VP/2.
             if row_index % 2 == 0:
-                row_start_y = first_center_y
+                row_shift = 0.0
+                hole_radius = circle_1_radius
             else:
-                row_start_y = first_center_y + (vertical_pitch * 0.5)
+                row_shift = vertical_pitch * 0.5
+                hole_radius = circle_2_radius
 
             for tube_index in range(tubes_per_row):
-                hole_y = row_start_y + (tube_index * vertical_pitch)
-                if hole_y > (hole_box_top + matrix_h + 0.001):
+                y_from_bottom = y_start_from_bottom + row_shift + (tube_index * vertical_pitch)
+                if y_from_bottom < y_bottom_limit or y_from_bottom > y_top_limit:
                     continue
-                painter.drawEllipse(QPointF(map_x(row_center_x), y + hole_y), hole_radius, hole_radius)
 
+                hole_y_local = h - y_from_bottom
+                painter.drawEllipse(QPointF(map_x(row_center_x), y + hole_y_local), hole_radius, hole_radius)
+
+        # Dimensions and pitch/diameter annotations
         self._draw_dim_h(painter, x, x + w, y + h, 45.0, f"{w:.0f}")
 
         if show_vertical_dims:
-            inner_y = y + dims.top_plate
-            inner_h = dims.fin_height
+            inner_y = y + tube_box_top_local
+            inner_h = tube_layout_h
             self._draw_dim_v(painter, inner_y, inner_y + inner_h, x + w, 49.0, f"{inner_h:.0f} (FH)")
             self._draw_dim_v(painter, y, y + h, x + w, 89.0, f"{h:.0f}")
             self._draw_dim_v(painter, y, y + dims.top_plate, x + w, 127.0, f"{dims.top_plate:.0f}")
@@ -1201,8 +1257,57 @@ class CoilDrawingWidget(QWidget):
                 f"{dims.bottom_plate:.0f}",
             )
 
+            if rows_in_width > 1:
+                hp_x1 = map_x(first_center_x)
+                hp_x2 = map_x(first_center_x + horizontal_pitch)
+                self._draw_internal_dim_h(painter, hp_x1, hp_x2, y + h + 20.0, f"HP {horizontal_pitch:.2f}")
+
+            if tubes_per_row > 1:
+                vp_y1 = y + (h - y_start_from_bottom)
+                vp_y2 = y + (h - (y_start_from_bottom + vertical_pitch))
+                vp_ref_x = map_x(first_center_x)
+                vp_offset = -58.0 if not mirror else 58.0
+                self._draw_dim_v(painter, vp_y1, vp_y2, vp_ref_x, vp_offset, f"VP {vertical_pitch:.2f}")
+
+        painter.setPen(QPen(self.DIM_COLOR, self.DIM_LINE_WIDTH))
+        painter.setFont(QFont("Arial", 9))
+        painter.drawText(
+            QRectF(x, y - 22.0, w, 16.0),
+            Qt.AlignmentFlag.AlignCenter,
+            f"C1 Ø {circle_1_dia:.2f}   C2 Ø {circle_2_dia:.2f}",
+        )
+
         painter.setPen(object_pen)
         painter.drawText(QRectF(x, y + h + 79.0, w, 30.0), Qt.AlignmentFlag.AlignCenter, label)
+
+    def _draw_notes_block(self, painter: QPainter, layout: dict[str, float]) -> None:
+        # Place notes at the bottom left of the whole page
+        notes_x = layout["left_side_x"] + 24.0
+        notes_y = layout["world_h"] - 110.0  # 110 px up from bottom
+        notes_w = max(220.0, min(380.0, layout["right_side_x"] - notes_x - 24.0))
+
+        painter.save()
+        painter.setPen(QPen(self.OBJECT_COLOR, self.OBJECT_LINE_WIDTH))
+        painter.setFont(QFont("Arial", 11))
+        painter.drawText(
+            QRectF(notes_x, notes_y, notes_w, 22.0),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            "Notes:-",
+        )
+
+        painter.setFont(QFont("Arial", 10))
+        note_lines = [
+            "1. FIN MATERIAL SHOULD BE PLAIN ALUMINIUM (0.11MM THICKNESS).",
+            "2. CASING MATERIAL SHOULD BE G.I. - 1.5MM THICKNESS.",
+            "3. 5/8\" COPPER TUBE WALL THICKNESS SHOULD BE 0.4 MM.",
+        ]
+        for index, line in enumerate(note_lines):
+            painter.drawText(
+                QRectF(notes_x, notes_y + 24.0 + (index * 24.0), notes_w, 22.0),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                line,
+            )
+        painter.restore()
 
     def _draw_underlined_label(self, painter: QPainter, rect: QRectF, text: str) -> None:
         painter.save()
