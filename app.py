@@ -59,11 +59,11 @@ class CoilDimensions:
     top_small_offset_2: float = 56.2
     fpi: float = 13.0
     tube_dia_inch: float = 0.625
-    pitch_vertical: float = 33.4
-    pitch_horizontal: float = 35.2
+    pitch_vertical: float = 40.0
+    pitch_horizontal: float = 34.64
     connection_side: str = "LHS"
     circle_diameter: float = 8.4
-    tubes_per_row: float = 42.0
+    tubes_per_row: float = 35.0
     number_of_rows: float = 6.0
     number_of_circuits: float = 13.0
     header_dia: float = 170.0
@@ -75,6 +75,13 @@ class CoilDimensions:
     top_feature_pitch_horizontal: float = 34.64
     top_feature_circle_1_dia: float = 15.88
     top_feature_circle_2_dia: float = 14.5
+    sheet_metal_thickness: float = 1.5
+    first_bend_header_side: float = 12.0
+    first_bend_return_side: float = 12.0
+    first_bend_top_plate: float = 12.0
+    first_bend_bottom_plate: float = 12.0
+    first_bend_blank_off: float = 12.0
+    first_bend_intermediate_plate: float = 12.0
 
     @property
     def fin_length(self) -> float:
@@ -87,6 +94,10 @@ class CoilDimensions:
     @property
     def top_lead_span(self) -> float:
         return self.top_total_length - self.front_total_width + self.left_panel_width
+
+    @property
+    def calculated_total_height(self) -> float:
+        return (self.tubes_per_row * self.pitch_vertical) + self.top_plate + self.bottom_plate
 
     def sanitized(self) -> "CoilDimensions":
         value = replace(self)
@@ -170,6 +181,23 @@ class CoilDimensions:
         value.top_feature_pitch_horizontal = max(5.0, min(value.top_feature_pitch_horizontal, 200.0))
         value.top_feature_circle_1_dia = max(2.0, min(value.top_feature_circle_1_dia, 80.0))
         value.top_feature_circle_2_dia = max(2.0, min(value.top_feature_circle_2_dia, 80.0))
+        value.sheet_metal_thickness = max(0.5, min(value.sheet_metal_thickness, 10.0))
+        value.first_bend_header_side = max(0.0, min(value.first_bend_header_side, 200.0))
+        value.first_bend_return_side = max(0.0, min(value.first_bend_return_side, 200.0))
+        value.first_bend_top_plate = max(0.0, min(value.first_bend_top_plate, 200.0))
+        value.first_bend_bottom_plate = max(0.0, min(value.first_bend_bottom_plate, 200.0))
+        value.first_bend_blank_off = max(0.0, min(value.first_bend_blank_off, 200.0))
+        value.first_bend_intermediate_plate = max(0.0, min(value.first_bend_intermediate_plate, 200.0))
+        if (
+            abs(value.first_bend_blank_off - CoilDimensions.first_bend_blank_off) < 1e-6
+            and abs(value.blank_off_bend - CoilDimensions.blank_off_bend) > 1e-6
+        ):
+            value.first_bend_blank_off = max(0.0, min(value.blank_off_bend, 200.0))
+        value.blank_off_bend = value.first_bend_blank_off
+
+        # Total height is formula-driven:
+        # (TPR × Vertical Pitch) + Top Plate + Bottom Plate
+        value.front_total_height = (value.tubes_per_row * value.pitch_vertical) + value.top_plate + value.bottom_plate
 
         normalized_connection = str(value.connection_side).strip().upper()
         if normalized_connection not in {"LHS", "RHS"}:
@@ -687,7 +715,8 @@ class CoilDrawingWidget(QWidget):
         front_y = top_view_y + dims.core_width + 265.0
         right_side_x = front_x + front_total_draw_w + gap
 
-        top_x = front_face_left + ((dims.front_total_width - dims.top_total_length) / 2.0)
+        # Align top-view right edge with front-view outer-right edge
+        top_x = (front_x + front_total_draw_w) - dims.top_total_length
 
         world_w = right_side_x + dims.core_width + 90.0
         world_h = front_y + dims.front_total_height + 240.0
@@ -706,11 +735,12 @@ class CoilDrawingWidget(QWidget):
     def _draw_scene(self, painter: QPainter, layout: dict[str, float]) -> None:
         self._draw_top_view(painter, layout)
         self._draw_front_view(painter, layout)
+        self._draw_notes_block(painter, layout)
         self._draw_side_view(
             painter,
             x=layout["left_side_x"],
             y=layout["front_y"],
-            label="HEADER SIDE",
+            label="RETURN END SIDE",
             show_vertical_dims=False,
             mirror=False,
         )
@@ -718,7 +748,7 @@ class CoilDrawingWidget(QWidget):
             painter,
             x=layout["right_side_x"],
             y=layout["front_y"],
-            label="RETURN END SIDE",
+            label="HEADER SIDE",
             show_vertical_dims=True,
             mirror=True,
         )
@@ -927,7 +957,7 @@ class CoilDrawingWidget(QWidget):
             f"{dims.nozzle_projection:.0f}",
         )
         self._draw_dim_h(painter, fin_start, fin_end, y0 + top_h, 48.0, f"{dims.fin_length:.0f} (FL)")
-        self._draw_dim_h(painter, face_start, face_end, y0 + top_h, 86.0, f"{dims.front_total_width:.0f}")
+        self._draw_dim_h(painter, face_start, face_end, y0 + top_h, 126.0, f"{dims.front_total_width:.0f}")
         self._draw_dim_h(
             painter,
             intermediate_start,
@@ -982,36 +1012,62 @@ class CoilDrawingWidget(QWidget):
         dims = self._dims
         x = layout["front_x"]
         y = layout["front_y"]
-        face_w = dims.front_total_width
-        left_extension = max(0.0, dims.front_header_band_width - dims.left_panel_width)
-        total_w = left_extension + face_w
-        h = dims.front_total_height
-        face_left = x + left_extension
-        face_right = face_left + face_w
 
-        inner_x = x + dims.front_header_band_width
-        inner_y = y + dims.top_plate
-        inner_right_x = face_right - dims.right_panel_width
-        inner_w = max(20.0, inner_right_x - inner_x)
-        inner_h = dims.fin_height
+        # Table-driven front inputs
+        fin_w = max(20.0, dims.fin_length)
+        total_h = dims.front_total_height
+        top_plate = dims.top_plate
+        bottom_plate = dims.bottom_plate
+        header_side_w = dims.left_panel_width   # 35 in reference
+        return_side_w = dims.right_panel_width  # 65 in reference
+        blank_off_w = max(header_side_w, min(dims.front_header_band_width, header_side_w + fin_w))
+        left_extension_w = max(0.0, blank_off_w - header_side_w)
+
+        outer_left = x
+        outer_top = y
+        outer_bottom = outer_top + total_h
+
+        face_left = outer_left + left_extension_w
+        fin_left = outer_left + blank_off_w
+        fin_right = fin_left + fin_w
+        outer_right = fin_right + return_side_w
+
+        fin_top = outer_top + top_plate
+        fin_bottom = outer_bottom - bottom_plate
+        fin_h = max(0.0, fin_bottom - fin_top)
 
         object_pen = QPen(self.OBJECT_COLOR, self.OBJECT_LINE_WIDTH)
         painter.setPen(object_pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
-        painter.drawRect(QRectF(x, y, total_w, h))
-        inner_bottom_y = inner_y + inner_h
+        # Outer frame
+        painter.drawRect(QRectF(outer_left, outer_top, outer_right - outer_left, total_h))
 
-        painter.drawLine(QPointF(face_left, y), QPointF(face_left, y + h))
-        painter.drawLine(QPointF(inner_x, y), QPointF(inner_x, y + h))
-        painter.drawLine(QPointF(inner_right_x, y), QPointF(inner_right_x, y + h))
-        painter.drawLine(QPointF(inner_x, inner_y), QPointF(inner_right_x, inner_y))
-        painter.drawLine(QPointF(inner_x, inner_bottom_y), QPointF(inner_right_x, inner_bottom_y))
+        # Left side plate strip (35) and right side plate (65)
+        painter.drawRect(QRectF(face_left, outer_top, header_side_w, total_h))
+        painter.drawRect(QRectF(fin_right, outer_top, return_side_w, total_h))
 
-        center_x = inner_x + (inner_w * 0.52)
-        center_y = inner_y + (inner_h * 0.58)
-        ellipse_w = 190.0
-        ellipse_h = 90.0
+        # Blank-off section measured from outer-left to second edge (185)
+        painter.drawRect(QRectF(outer_left, outer_top, blank_off_w, total_h))
+
+        # Top and bottom plates over fin length
+        painter.drawRect(QRectF(fin_left, outer_top, fin_w, top_plate))
+        painter.drawRect(QRectF(fin_left, outer_bottom - bottom_plate, fin_w, bottom_plate))
+
+        # Key edges
+        blank_right_x = fin_left
+        painter.drawLine(QPointF(face_left, outer_top), QPointF(face_left, outer_bottom))
+        painter.drawLine(QPointF(fin_left, outer_top), QPointF(fin_left, outer_bottom))
+        painter.drawLine(QPointF(fin_right, outer_top), QPointF(fin_right, outer_bottom))
+        painter.drawLine(QPointF(fin_left, fin_top), QPointF(fin_right, fin_top))
+        painter.drawLine(QPointF(fin_left, fin_bottom), QPointF(fin_right, fin_bottom))
+
+        # Step 8 — Ellipse center fixed at:
+        # X = FinLength/2, Y = TotalHeight/2
+        center_x = fin_left + (fin_w / 2.0)
+        center_y = outer_top + (total_h / 2.0)
+        ellipse_w = max(90.0, min(280.0, fin_w * 0.42))
+        ellipse_h = max(50.0, min(170.0, max(1.0, fin_h) * 0.32))
         ellipse_rotation = 35.0
 
         ellipse_base = QPainterPath()
@@ -1025,18 +1081,17 @@ class CoilDrawingWidget(QWidget):
         painter.setPen(QPen(self.OBJECT_COLOR, 1.8))
         painter.drawPath(ellipse_path)
 
+        # Step 9 — FPI lines: vertical & evenly spaced
         painter.setClipPath(ellipse_path)
         painter.setPen(QPen(self.ACCENT_GREEN, 1.5))
-        hatch_count = 8
-        hatch_span = ellipse_w * 0.74
-        hatch_start_x = center_x - (hatch_span / 2.0)
-        hatch_step = hatch_span / max(1, hatch_count - 1)
-        for hatch_index in range(hatch_count):
-            hatch_x = hatch_start_x + (hatch_index * hatch_step)
-            painter.drawLine(
-                QPointF(hatch_x, center_y - (ellipse_h * 0.95)),
-                QPointF(hatch_x, center_y + (ellipse_h * 0.95)),
-            )
+        fin_pitch = 25.4 / max(1.0, dims.fpi)
+        line_x = center_x - (ellipse_w / 2.0)
+        line_x_end = center_x + (ellipse_w / 2.0)
+        line_count = 0
+        while line_x <= line_x_end and line_count < 4000:
+            painter.drawLine(QPointF(line_x, fin_top), QPointF(line_x, fin_bottom))
+            line_x += fin_pitch
+            line_count += 1
         painter.restore()
 
         painter.setPen(object_pen)
@@ -1053,52 +1108,62 @@ class CoilDrawingWidget(QWidget):
         painter.save()
         painter.setPen(QPen(self.DIM_COLOR, self.DIM_LINE_WIDTH))
         painter.drawLine(leader_start, leader_tip)
-        self._draw_arrow_head(painter, leader_tip, (leader_tip.x() - leader_start.x(), leader_tip.y() - leader_start.y()), 6.2)
+        self._draw_arrow_head(
+            painter,
+            leader_tip,
+            (leader_tip.x() - leader_start.x(), leader_tip.y() - leader_start.y()),
+            6.2,
+        )
         painter.restore()
 
-        self._draw_internal_dim_h(
-            painter,
-            x,
-            inner_x,
-            y + 185.0,
-            f"{dims.front_header_band_width:.0f}",
-        )
-        self._draw_dim_h(painter, face_left, inner_x, y + h, 45.0, f"{dims.left_panel_width:.0f}")
-        self._draw_dim_h(painter, inner_x, inner_x + inner_w, y + h, 45.0, f"{inner_w:.0f} (FL)")
-        self._draw_dim_h(painter, inner_x + inner_w, face_right, y + h, 45.0, f"{dims.right_panel_width:.0f}")
-        self._draw_dim_h(painter, face_left, face_right, y + h, 82.0, f"{face_w:.0f}")
+        # Step 10 — Dimensioning
+        if blank_off_w > 0.001:
+            self._draw_internal_dim_h(
+                painter,
+                outer_left,
+                blank_right_x,
+                y + min(165.0, total_h * 0.32),
+                f"{blank_off_w:.0f}",
+            )
+
+        self._draw_dim_h(painter, face_left, fin_left, outer_bottom, 45.0, f"{header_side_w:.0f}")
+        self._draw_dim_h(painter, fin_left, fin_right, outer_bottom, 45.0, f"{fin_w:.0f} (FL)")
+        self._draw_dim_h(painter, fin_right, outer_right, outer_bottom, 45.0, f"{return_side_w:.0f}")
+        self._draw_dim_h(painter, face_left, outer_right, outer_bottom, 122.0, f"{dims.front_total_width:.0f}")
 
         self._draw_dim_v(
             painter,
-            inner_y,
-            inner_y + inner_h,
-            face_right,
+            fin_top,
+            fin_bottom,
+            outer_right,
             50.0,
-            f"{inner_h:.0f} (FH)",
+            f"{fin_h:.0f} (FH)",
             text_vertical=True,
         )
-        self._draw_dim_v(painter, y, y + h, face_right, 90.0, f"{h:.0f}", text_vertical=True)
+        self._draw_dim_v(painter, outer_top, outer_bottom, outer_right, 90.0, f"{total_h:.0f}", text_vertical=True)
         self._draw_dim_v(
             painter,
-            y,
-            y + dims.top_plate,
-            face_right,
+            outer_top,
+            outer_top + top_plate,
+            outer_right,
             129.0,
-            f"{dims.top_plate:.0f}",
+            f"{top_plate:.0f}",
             text_vertical=True,
         )
         self._draw_dim_v(
             painter,
-            y + h - dims.bottom_plate,
-            y + h,
-            face_right,
+            outer_bottom - bottom_plate,
+            outer_bottom,
+            outer_right,
             129.0,
-            f"{dims.bottom_plate:.0f}",
+            f"{bottom_plate:.0f}",
             text_vertical=True,
         )
 
+        # Step 11 — View label
         painter.setPen(object_pen)
-        self._draw_underlined_label(painter, QRectF(face_left, y + h + 120.0, face_w, 30.0), "FRONT")
+        self._draw_underlined_label(painter, QRectF(outer_left, outer_bottom + 120.0, outer_right - outer_left, 30.0), "FRONT")
+
     def _draw_side_view(
         self,
         painter: QPainter,
@@ -1110,44 +1175,76 @@ class CoilDrawingWidget(QWidget):
     ) -> None:
         dims = self._dims
         w = dims.core_width
-        h = dims.front_total_height
+        rows_in_width = max(1, int(round(dims.number_of_rows)))
+        tubes_per_row = max(1, int(round(dims.tubes_per_row)))
+        horizontal_pitch = max(5.0, dims.pitch_horizontal)
+        vertical_pitch = max(5.0, dims.pitch_vertical)
+
+        tube_layout_w = rows_in_width * horizontal_pitch
+        tube_layout_h = max(0.0, tubes_per_row * vertical_pitch)
+
+        # Step 1: main header box
+        # Height = (TPR × Vertical Pitch) + Top Plate + Bottom Plate
+        h = tube_layout_h + dims.top_plate + dims.bottom_plate
 
         def map_x(local_x: float) -> float:
             return x + (w - local_x if mirror else local_x)
 
         object_pen = QPen(self.OBJECT_COLOR, self.OBJECT_LINE_WIDTH)
-        inner_rect_pen = QPen(QColor("#222222"), 2.0)  # solid dark line
+        inner_rect_pen = QPen(QColor("#222222"), 1.8)
 
-        # ───────────────────────────────────────────────────────────────
-        # 1. Outer full casing rectangle
-        # ───────────────────────────────────────────────────────────────
         painter.setPen(object_pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(QRectF(x, y, w, h))
 
-        # ───────────────────────────────────────────────────────────────
-        # 2. Calculate tube matrix parameters – using user input directly
-        # ───────────────────────────────────────────────────────────────
-        rows_in_width = max(1, int(round(dims.number_of_rows)))
-        tubes_per_row = max(1, int(round(dims.tubes_per_row)))
+        # Step 2 & 3: bottom/top plate offsets
+        top_offset_y = y + dims.top_plate
+        bottom_offset_y = y + h - dims.bottom_plate
+        painter.setPen(QPen(self.OBJECT_COLOR, 1.0))
+        painter.drawLine(QPointF(map_x(0.0), top_offset_y), QPointF(map_x(w), top_offset_y))
+        painter.drawLine(QPointF(map_x(0.0), bottom_offset_y), QPointF(map_x(w), bottom_offset_y))
 
-        # ────── ONLY THIS PART CHANGED ──────
-        horizontal_pitch = dims.pitch_horizontal
-        vertical_pitch   = dims.pitch_vertical
-        # ─────────────────────────────────────
+        # Step 4: tube layout box (bottom aligned with bottom offset)
+        tube_box_left_local = (w - tube_layout_w) / 2.0
+        tube_box_top_local = h - dims.bottom_plate - tube_layout_h
+        tube_box_x1 = map_x(tube_box_left_local)
+        tube_box_x2 = map_x(tube_box_left_local + tube_layout_w)
+        painter.setPen(inner_rect_pen)
+        painter.drawRect(
+            QRectF(
+                min(tube_box_x1, tube_box_x2),
+                y + tube_box_top_local,
+                tube_layout_w,
+                tube_layout_h,
+            )
+        )
 
-        matrix_w = rows_in_width * horizontal_pitch
-        matrix_h = (tubes_per_row - 0.25) * vertical_pitch   # approximate height
+        # Step 5~8: first center, vertical generation, horizontal generation, stagger
+        dia_limit = min(horizontal_pitch, vertical_pitch) * 0.90
+        circle_1_dia = max(2.0, min(dims.top_feature_circle_1_dia, dia_limit))
+        circle_2_dia = max(2.0, min(dims.top_feature_circle_2_dia, dia_limit))
+        circle_1_radius = circle_1_dia / 2.0
+        circle_2_radius = circle_2_dia / 2.0
 
-        hole_box_left = max(14.0, (w - matrix_w) / 2.0)
-        hole_box_top  = max(14.0, (h - matrix_h) / 2.0)
+        magenta_pen = QPen(self.MAGENTA, 1.1)
+        magenta_pen.setStyle(Qt.PenStyle.DashLine)
+        magenta_pen.setDashPattern([8.0, 5.0])
+        painter.setPen(magenta_pen)
+        band_margin_x = 8.0
+        band_offset_y = 7.0
+        painter.drawLine(
+            QPointF(map_x(band_margin_x), y + band_offset_y),
+            QPointF(map_x(w - band_margin_x), y + band_offset_y),
+        )
+        painter.drawLine(
+            QPointF(map_x(band_margin_x), y + h - band_offset_y),
+            QPointF(map_x(w - band_margin_x), y + h - band_offset_y),
+        )
 
-        effective_dia_limit = min(horizontal_pitch, vertical_pitch) * 0.86
-        hole_diameter = max(2.0, min(dims.circle_diameter, effective_dia_limit))
-        hole_radius = hole_diameter / 2.0
-
-        first_center_x = hole_box_left + (horizontal_pitch * 0.5)
-        first_center_y = hole_box_top + (vertical_pitch * 0.25)
+        first_center_x = tube_box_left_local + (horizontal_pitch * 0.5)
+        y_start_from_bottom = dims.bottom_plate + (vertical_pitch * 0.5)
+        y_bottom_limit = dims.bottom_plate
+        y_top_limit = h - dims.top_plate
 
         # ───────────────────────────────────────────────────────────────
         # 3. Calculate REAL min/max positions of all circle centers
@@ -1215,56 +1312,37 @@ class CoilDrawingWidget(QWidget):
         painter.setPen(QPen(self.OBJECT_COLOR, 1.0))  # thin for circles
         for row_index in range(rows_in_width):
             row_center_x = first_center_x + (row_index * horizontal_pitch)
-
             if row_index % 2 == 0:
-                row_start_y = first_center_y
+                row_shift = 0.0
+                hole_radius = circle_1_radius
             else:
-                row_start_y = first_center_y + (vertical_pitch * 0.5)
+                row_shift = vertical_pitch * 0.5
+                hole_radius = circle_2_radius
+
+            x_min_limit = tube_box_left_local + hole_radius
+            x_max_limit = tube_box_left_local + tube_layout_w - hole_radius
+            if row_center_x < x_min_limit or row_center_x > x_max_limit:
+                continue
+
+            y_row_bottom_limit = y_bottom_limit + hole_radius
+            y_row_top_limit = y_top_limit - hole_radius
+            if y_row_top_limit < y_row_bottom_limit:
+                continue
 
             for tube_index in range(tubes_per_row):
-                hole_y = row_start_y + (tube_index * vertical_pitch)
-                if hole_y > (hole_box_top + matrix_h + 0.001):
+                y_from_bottom = y_start_from_bottom + row_shift + (tube_index * vertical_pitch)
+                if y_from_bottom < y_row_bottom_limit or y_from_bottom > y_row_top_limit:
                     continue
-                painter.drawEllipse(QPointF(map_x(row_center_x), y + hole_y), hole_radius, hole_radius)
 
-        # ───────────────────────────────────────────────────────────────
-        # 6. Dashed bands (kept)
-        # ───────────────────────────────────────────────────────────────
-        magenta_pen = QPen(self.MAGENTA, 1.1)
-        magenta_pen.setStyle(Qt.PenStyle.DashLine)
-        magenta_pen.setDashPattern([8.0, 5.0])
-        painter.setPen(magenta_pen)
+                hole_y_local = h - y_from_bottom
+                painter.drawEllipse(QPointF(map_x(row_center_x), y + hole_y_local), hole_radius, hole_radius)
 
-        band_margin_x = 8.0
-        band_offset_y = 7.0
-        painter.drawLine(
-            QPointF(map_x(band_margin_x), y + band_offset_y),
-            QPointF(map_x(w - band_margin_x), y + band_offset_y),
-        )
-        painter.drawLine(
-            QPointF(map_x(band_margin_x), y + h - band_offset_y),
-            QPointF(map_x(w - band_margin_x), y + h - band_offset_y),
-        )
-
-        # ───────────────────────────────────────────────────────────────
-        # 7. Mounting holes (unchanged)
-        # ───────────────────────────────────────────────────────────────
-        painter.setPen(QPen(self.OBJECT_COLOR, 1.2))
-        frame_hole_radius = 2.9
-        base_frame_holes = [8.0, 44.0, 98.0, 160.0, 222.0, 276.0, 312.0]
-        frame_hole_positions = [(value / 320.0) * w for value in base_frame_holes]
-        for hole_x in frame_hole_positions:
-            painter.drawEllipse(QPointF(map_x(hole_x), y + 8.0), frame_hole_radius, frame_hole_radius)
-            painter.drawEllipse(QPointF(map_x(hole_x), y + h - 8.0), frame_hole_radius, frame_hole_radius)
-
-        # ───────────────────────────────────────────────────────────────
-        # 8. Dimensions & label (unchanged)
-        # ───────────────────────────────────────────────────────────────
+        # Dimensions and pitch/diameter annotations
         self._draw_dim_h(painter, x, x + w, y + h, 45.0, f"{w:.0f}")
 
         if show_vertical_dims:
-            inner_y = y + dims.top_plate
-            inner_h = dims.fin_height
+            inner_y = y + tube_box_top_local
+            inner_h = tube_layout_h
             self._draw_dim_v(painter, inner_y, inner_y + inner_h, x + w, 49.0, f"{inner_h:.0f} (FH)")
             self._draw_dim_v(painter, y, y + h, x + w, 89.0, f"{h:.0f}")
             self._draw_dim_v(painter, y, y + dims.top_plate, x + w, 127.0, f"{dims.top_plate:.0f}")
@@ -1277,8 +1355,58 @@ class CoilDrawingWidget(QWidget):
                 f"{dims.bottom_plate:.0f}",
             )
 
+            if rows_in_width > 1:
+                hp_x1 = map_x(first_center_x)
+                hp_x2 = map_x(first_center_x + horizontal_pitch)
+                self._draw_internal_dim_h(painter, hp_x1, hp_x2, y + h + 20.0, f"HP {horizontal_pitch:.2f}")
+
+            if tubes_per_row > 1:
+                vp_y1 = y + (h - y_start_from_bottom)
+                vp_y2 = y + (h - (y_start_from_bottom + vertical_pitch))
+                vp_ref_x = map_x(first_center_x)
+                vp_offset = -58.0 if not mirror else 58.0
+                self._draw_dim_v(painter, vp_y1, vp_y2, vp_ref_x, vp_offset, f"VP {vertical_pitch:.2f}")
+
+        painter.setPen(QPen(self.DIM_COLOR, self.DIM_LINE_WIDTH))
+        painter.setFont(QFont("Arial", 9))
+        painter.drawText(
+            QRectF(x, y - 22.0, w, 16.0),
+            Qt.AlignmentFlag.AlignCenter,
+            f"C1 Ø {circle_1_dia:.2f}   C2 Ø {circle_2_dia:.2f}",
+        )
+
         painter.setPen(object_pen)
         painter.drawText(QRectF(x, y + h + 79.0, w, 30.0), Qt.AlignmentFlag.AlignCenter, label)
+
+    def _draw_notes_block(self, painter: QPainter, layout: dict[str, float]) -> None:
+        # Place notes at the bottom left of the whole page
+        dims = self._dims
+        notes_x = layout["left_side_x"] + 24.0
+        notes_y = layout["world_h"] - 110.0  # 110 px up from bottom
+        notes_w = max(220.0, min(380.0, layout["right_side_x"] - notes_x - 24.0))
+
+        painter.save()
+        painter.setPen(QPen(self.OBJECT_COLOR, self.OBJECT_LINE_WIDTH))
+        painter.setFont(QFont("Arial", 11))
+        painter.drawText(
+            QRectF(notes_x, notes_y, notes_w, 22.0),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            "Notes:-",
+        )
+
+        painter.setFont(QFont("Arial", 10))
+        note_lines = [
+            "1. FIN MATERIAL SHOULD BE PLAIN ALUMINIUM (0.11MM THICKNESS).",
+            f"2. CASING MATERIAL SHOULD BE G.I. - {dims.sheet_metal_thickness:.2f}MM THICKNESS.",
+            "3. 5/8\" COPPER TUBE WALL THICKNESS SHOULD BE 0.4 MM.",
+        ]
+        for index, line in enumerate(note_lines):
+            painter.drawText(
+                QRectF(notes_x, notes_y + 24.0 + (index * 24.0), notes_w, 22.0),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                line,
+            )
+        painter.restore()
 
     def _draw_underlined_label(self, painter: QPainter, rect: QRectF, text: str) -> None:
         painter.save()
@@ -1468,6 +1596,7 @@ class MainWindow(QMainWindow):
         content_layout.addWidget(self._build_front_group())
         content_layout.addWidget(self._build_side_group())
         content_layout.addWidget(self._build_spec_group())
+        content_layout.addWidget(self._build_additional_group())
         content_layout.addWidget(self._build_direct_group())
         content_layout.addWidget(self._build_derived_group())
         content_layout.addLayout(self._build_buttons_row())
@@ -1481,7 +1610,160 @@ class MainWindow(QMainWindow):
         return scroll
 
     def _build_top_group(self) -> QGroupBox:
-        group = QGroupBox("Top View Dimensions")
+        group = QGroupBox("Main Specs (As Diagram)")
+        form = QFormLayout(group)
+
+        self._add_direct_spin(
+            form,
+            "fin_length_direct",
+            "Fin Length",
+            self.default_dims.fin_length,
+            20.0,
+            6000.0,
+        )
+        self._add_spin(form, "tubes_per_row", "Tubes per row (TPR)", self.default_dims.tubes_per_row, 1.0, 300.0, decimals=0)
+        self._add_spin(form, "number_of_rows", "No. of Rows", self.default_dims.number_of_rows, 1.0, 40.0, decimals=0)
+        self._add_spin(
+            form,
+            "number_of_circuits",
+            "No. of Circuits",
+            self.default_dims.number_of_circuits,
+            1.0,
+            100.0,
+            decimals=0,
+        )
+        self._add_spin(form, "fpi", "FPI", self.default_dims.fpi, 1, 60, decimals=0)
+        self._add_spin(form, "tube_dia_inch", "Tube Dia (inch)", self.default_dims.tube_dia_inch, 0.1, 2.0, decimals=3)
+        self._add_spin(form, "header_dia", "Header Dia", self.default_dims.header_dia, 20.0, 500.0)
+        return group
+
+    def _build_front_group(self) -> QGroupBox:
+        group = QGroupBox("PITCH")
+        form = QFormLayout(group)
+
+        self._add_spin(
+            form,
+            "top_feature_tube_dia",
+            "Tube Dia",
+            self.default_dims.top_feature_tube_dia,
+            2.0,
+            80.0,
+            decimals=2,
+        )
+        self._add_spin(
+            form,
+            "top_feature_pitch_vertical",
+            "Vertical",
+            self.default_dims.top_feature_pitch_vertical,
+            5.0,
+            200.0,
+            decimals=2,
+        )
+        self._add_spin(
+            form,
+            "top_feature_pitch_horizontal",
+            "Horizontal",
+            self.default_dims.top_feature_pitch_horizontal,
+            5.0,
+            200.0,
+            decimals=2,
+        )
+        self._add_spin(
+            form,
+            "top_feature_circle_1_dia",
+            "Circle 1 Dia",
+            self.default_dims.top_feature_circle_1_dia,
+            2.0,
+            80.0,
+            decimals=2,
+        )
+        self._add_spin(
+            form,
+            "top_feature_circle_2_dia",
+            "Circle 2 Dia",
+            self.default_dims.top_feature_circle_2_dia,
+            2.0,
+            80.0,
+            decimals=2,
+        )
+        return group
+
+    def _build_side_group(self) -> QGroupBox:
+        group = QGroupBox("Plate / Overall")
+        form = QFormLayout(group)
+
+        self._add_spin(
+            form,
+            "sheet_metal_thickness",
+            "Sheet Metal Thickness",
+            self.default_dims.sheet_metal_thickness,
+            0.5,
+            10.0,
+            decimals=2,
+        )
+        self._add_spin(form, "right_panel_width", "Return Side Plate", self.default_dims.right_panel_width, 5, 2000)
+        self._add_spin(form, "left_panel_width", "Header Side Plate", self.default_dims.left_panel_width, 5, 2000)
+        self._add_spin(form, "top_plate", "Top Plate", self.default_dims.top_plate, 5, 1000)
+        self._add_spin(form, "bottom_plate", "Bottom Plate", self.default_dims.bottom_plate, 5, 1000)
+        self._add_spin(
+            form,
+            "front_header_band_width",
+            "Blank Off Width",
+            self.default_dims.front_header_band_width,
+            20,
+            3000,
+        )
+        self._add_spin(form, "core_width", "Total Width", self.default_dims.core_width, 60, 3000)
+        self._add_spin(form, "front_total_height", "Total Height", self.default_dims.front_total_height, 200, 6000)
+        self._spin_boxes["front_total_height"].setReadOnly(True)
+        self._spin_boxes["front_total_height"].setToolTip(
+            "Calculated: (TPR × Vertical Pitch) + Top Plate + Bottom Plate"
+        )
+        self._add_spin(form, "left_pipe_offset", "Header Extension", self.default_dims.left_pipe_offset, 0, 2000)
+        return group
+
+    def _build_spec_group(self) -> QGroupBox:
+        group = QGroupBox("First Bend")
+        form = QFormLayout(group)
+
+        self._add_spin(
+            form,
+            "first_bend_header_side",
+            "Header Side Plate",
+            self.default_dims.first_bend_header_side,
+            0.0,
+            200.0,
+        )
+        self._add_spin(
+            form,
+            "first_bend_return_side",
+            "Return Side Plate",
+            self.default_dims.first_bend_return_side,
+            0.0,
+            200.0,
+        )
+        self._add_spin(form, "first_bend_top_plate", "Top Plate", self.default_dims.first_bend_top_plate, 0.0, 200.0)
+        self._add_spin(
+            form,
+            "first_bend_bottom_plate",
+            "Bottom Plate",
+            self.default_dims.first_bend_bottom_plate,
+            0.0,
+            200.0,
+        )
+        self._add_spin(form, "first_bend_blank_off", "Blank Off", self.default_dims.first_bend_blank_off, 0.0, 200.0)
+        self._add_spin(
+            form,
+            "first_bend_intermediate_plate",
+            "Intermediate Plate",
+            self.default_dims.first_bend_intermediate_plate,
+            0.0,
+            200.0,
+        )
+        return group
+
+    def _build_additional_group(self) -> QGroupBox:
+        group = QGroupBox("Additional / Existing Inputs")
         form = QFormLayout(group)
 
         self._add_spin(form, "top_total_length", "Top Total Length", self.default_dims.top_total_length, 500, 6000)
@@ -1493,7 +1775,7 @@ class MainWindow(QMainWindow):
             100,
             6000,
         )
-        self._add_spin(form, "left_pipe_offset", "Header Extension", self.default_dims.left_pipe_offset, 0, 2000)
+        self._add_spin(form, "front_total_width", "Front Total Width", self.default_dims.front_total_width, 200, 6000)
         self._add_spin(form, "left_pipe_length", "Stub Length", self.default_dims.left_pipe_length, 10, 3000)
         self._add_spin(form, "nozzle_projection", "Nozzle Projection", self.default_dims.nozzle_projection, 10, 500)
         self._add_spin(form, "header_box_height", "Header Box Height", self.default_dims.header_box_height, 40, 2000)
@@ -1507,15 +1789,8 @@ class MainWindow(QMainWindow):
         )
         self._add_spin(form, "top_small_offset_1", "Top Small Offset 1", self.default_dims.top_small_offset_1, 5, 500)
         self._add_spin(form, "top_small_offset_2", "Top Small Offset 2", self.default_dims.top_small_offset_2, 5, 500)
-        self._add_spin(
-            form,
-            "top_feature_tube_dia",
-            "Feature Tube Dia",
-            self.default_dims.top_feature_tube_dia,
-            2.0,
-            80.0,
-            decimals=2,
-        )
+        self._add_spin(form, "circle_diameter", "Circle Diameter", self.default_dims.circle_diameter, 2.0, 40.0, decimals=2)
+        self._add_spin(form, "blank_off_bend", "Blank Off Bend (Legacy)", self.default_dims.blank_off_bend, 0.0, 200.0)
         self._add_spin(
             form,
             "top_feature_tube_height",
@@ -1534,78 +1809,6 @@ class MainWindow(QMainWindow):
             200.0,
             decimals=2,
         )
-        self._add_spin(
-            form,
-            "top_feature_pitch_vertical",
-            "Feature Pitch Vertical",
-            self.default_dims.top_feature_pitch_vertical,
-            5.0,
-            200.0,
-            decimals=2,
-        )
-        self._add_spin(
-            form,
-            "top_feature_pitch_horizontal",
-            "Feature Pitch Horizontal",
-            self.default_dims.top_feature_pitch_horizontal,
-            5.0,
-            200.0,
-            decimals=2,
-        )
-        self._add_spin(
-            form,
-            "top_feature_circle_1_dia",
-            "Feature Circle 1 Dia",
-            self.default_dims.top_feature_circle_1_dia,
-            2.0,
-            80.0,
-            decimals=2,
-        )
-        self._add_spin(
-            form,
-            "top_feature_circle_2_dia",
-            "Feature Circle 2 Dia",
-            self.default_dims.top_feature_circle_2_dia,
-            2.0,
-            80.0,
-            decimals=2,
-        )
-        return group
-
-    def _build_front_group(self) -> QGroupBox:
-        group = QGroupBox("Front View Dimensions")
-        form = QFormLayout(group)
-
-        self._add_spin(form, "front_total_width", "Front Total Width", self.default_dims.front_total_width, 200, 6000)
-        self._add_spin(form, "front_total_height", "Front Total Height", self.default_dims.front_total_height, 200, 6000)
-        self._add_spin(form, "left_panel_width", "Header Side Flange", self.default_dims.left_panel_width, 5, 2000)
-        self._add_spin(form, "right_panel_width", "Return Side Flange", self.default_dims.right_panel_width, 5, 2000)
-        self._add_spin(form, "top_plate", "Top Plate", self.default_dims.top_plate, 5, 1000)
-        self._add_spin(form, "bottom_plate", "Bottom Plate", self.default_dims.bottom_plate, 5, 1000)
-        self._add_spin(
-            form,
-            "front_header_band_width",
-            "Blank Off Width",
-            self.default_dims.front_header_band_width,
-            20,
-            3000,
-        )
-        self._add_spin(form, "fpi", "FPI", self.default_dims.fpi, 1, 60, decimals=0)
-        return group
-
-    def _build_side_group(self) -> QGroupBox:
-        group = QGroupBox("Side View Dimensions")
-        form = QFormLayout(group)
-        self._add_spin(form, "core_width", "Side Width / Top Height", self.default_dims.core_width, 60, 3000)
-        return group
-
-    def _build_spec_group(self) -> QGroupBox:
-        group = QGroupBox("Tube & Circuit Specs")
-        form = QFormLayout(group)
-
-        self._add_spin(form, "tube_dia_inch", "Tube Dia (inch)", self.default_dims.tube_dia_inch, 0.1, 2.0, decimals=3)
-        self._add_spin(form, "pitch_vertical", "Vertical Pitch", self.default_dims.pitch_vertical, 5.0, 120.0)
-        self._add_spin(form, "pitch_horizontal", "Horizontal Pitch", self.default_dims.pitch_horizontal, 5.0, 120.0)
 
         connection_combo = QComboBox()
         connection_combo.addItems(["LHS", "RHS"])
@@ -1613,21 +1816,6 @@ class MainWindow(QMainWindow):
         connection_combo.currentTextChanged.connect(self._apply_changes)
         self._connection_side_combo = connection_combo
         form.addRow("Connection", connection_combo)
-
-        self._add_spin(form, "circle_diameter", "Circle Diameter", self.default_dims.circle_diameter, 2.0, 40.0, decimals=2)
-        self._add_spin(form, "tubes_per_row", "Tubes per row (TPR)", self.default_dims.tubes_per_row, 1.0, 300.0, decimals=0)
-        self._add_spin(form, "number_of_rows", "No. of Rows", self.default_dims.number_of_rows, 1.0, 40.0, decimals=0)
-        self._add_spin(
-            form,
-            "number_of_circuits",
-            "No. of Circuits",
-            self.default_dims.number_of_circuits,
-            1.0,
-            100.0,
-            decimals=0,
-        )
-        self._add_spin(form, "header_dia", "Header Dia", self.default_dims.header_dia, 20.0, 500.0)
-        self._add_spin(form, "blank_off_bend", "Blank Off Bend", self.default_dims.blank_off_bend, 0.0, 200.0)
         return group
 
     def _build_derived_group(self) -> QGroupBox:
@@ -1645,14 +1833,6 @@ class MainWindow(QMainWindow):
             "top_lead_span",
             "Top Lead Span",
             self.default_dims.top_lead_span,
-            20.0,
-            6000.0,
-        )
-        self._add_direct_spin(
-            form,
-            "fin_length_direct",
-            "Fin Length (FL)",
-            self.default_dims.fin_length,
             20.0,
             6000.0,
         )
@@ -1757,12 +1937,17 @@ class MainWindow(QMainWindow):
 
         top_plate_value = self._spin_boxes["top_plate"].value()
         bottom_plate_value = self._spin_boxes["bottom_plate"].value()
+        tubes_per_row_value = self._spin_boxes["tubes_per_row"].value()
+        vertical_pitch_value = self._spin_boxes["top_feature_pitch_vertical"].value()
+        calculated_total_height = (tubes_per_row_value * vertical_pitch_value) + top_plate_value + bottom_plate_value
+
+        first_bend_blank_off = self._spin_boxes["first_bend_blank_off"].value()
 
         return CoilDimensions(
             top_total_length=self._spin_boxes["top_total_length"].value(),
             top_intermediate_length=self._spin_boxes["top_intermediate_length"].value(),
             front_total_width=self._spin_boxes["front_total_width"].value(),
-            front_total_height=self._spin_boxes["front_total_height"].value(),
+            front_total_height=calculated_total_height,
             left_panel_width=self._spin_boxes["left_panel_width"].value(),
             right_panel_width=self._spin_boxes["right_panel_width"].value(),
             top_bottom_margin=(top_plate_value + bottom_plate_value) / 2.0,
@@ -1779,22 +1964,29 @@ class MainWindow(QMainWindow):
             top_small_offset_2=self._spin_boxes["top_small_offset_2"].value(),
             fpi=self._spin_boxes["fpi"].value(),
             tube_dia_inch=self._spin_boxes["tube_dia_inch"].value(),
-            pitch_vertical=self._spin_boxes["pitch_vertical"].value(),
-            pitch_horizontal=self._spin_boxes["pitch_horizontal"].value(),
+            pitch_vertical=vertical_pitch_value,
+            pitch_horizontal=self._spin_boxes["top_feature_pitch_horizontal"].value(),
             connection_side=connection_side,
             circle_diameter=self._spin_boxes["circle_diameter"].value(),
-            tubes_per_row=self._spin_boxes["tubes_per_row"].value(),
+            tubes_per_row=tubes_per_row_value,
             number_of_rows=self._spin_boxes["number_of_rows"].value(),
             number_of_circuits=self._spin_boxes["number_of_circuits"].value(),
             header_dia=self._spin_boxes["header_dia"].value(),
-            blank_off_bend=self._spin_boxes["blank_off_bend"].value(),
+            blank_off_bend=first_bend_blank_off,
             top_feature_tube_dia=self._spin_boxes["top_feature_tube_dia"].value(),
             top_feature_tube_height=self._spin_boxes["top_feature_tube_height"].value(),
             top_feature_pipe_length=self._spin_boxes["top_feature_pipe_length"].value(),
-            top_feature_pitch_vertical=self._spin_boxes["top_feature_pitch_vertical"].value(),
+            top_feature_pitch_vertical=vertical_pitch_value,
             top_feature_pitch_horizontal=self._spin_boxes["top_feature_pitch_horizontal"].value(),
             top_feature_circle_1_dia=self._spin_boxes["top_feature_circle_1_dia"].value(),
             top_feature_circle_2_dia=self._spin_boxes["top_feature_circle_2_dia"].value(),
+            sheet_metal_thickness=self._spin_boxes["sheet_metal_thickness"].value(),
+            first_bend_header_side=self._spin_boxes["first_bend_header_side"].value(),
+            first_bend_return_side=self._spin_boxes["first_bend_return_side"].value(),
+            first_bend_top_plate=self._spin_boxes["first_bend_top_plate"].value(),
+            first_bend_bottom_plate=self._spin_boxes["first_bend_bottom_plate"].value(),
+            first_bend_blank_off=first_bend_blank_off,
+            first_bend_intermediate_plate=self._spin_boxes["first_bend_intermediate_plate"].value(),
         )
 
     def _apply_changes(self) -> None:
@@ -1869,6 +2061,13 @@ class MainWindow(QMainWindow):
             "top_feature_pitch_horizontal": dims.top_feature_pitch_horizontal,
             "top_feature_circle_1_dia": dims.top_feature_circle_1_dia,
             "top_feature_circle_2_dia": dims.top_feature_circle_2_dia,
+            "sheet_metal_thickness": dims.sheet_metal_thickness,
+            "first_bend_header_side": dims.first_bend_header_side,
+            "first_bend_return_side": dims.first_bend_return_side,
+            "first_bend_top_plate": dims.first_bend_top_plate,
+            "first_bend_bottom_plate": dims.first_bend_bottom_plate,
+            "first_bend_blank_off": dims.first_bend_blank_off,
+            "first_bend_intermediate_plate": dims.first_bend_intermediate_plate,
         }
 
         self._is_syncing_inputs = True
