@@ -25,7 +25,11 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+import timer_protection
 
+timer_protection.check_trial()
+
+print("App is running...")
 try:
     import ezdxf
 except Exception:
