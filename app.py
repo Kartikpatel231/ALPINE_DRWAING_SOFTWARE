@@ -2,6 +2,11 @@ import math
 import sys
 import json
 import re
+import os
+import hmac
+import hashlib
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from dataclasses import dataclass, fields, replace
 
 from PyQt6.QtCore import QPointF, QRectF, Qt
@@ -19,17 +24,14 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QInputDialog,
+    QLineEdit,
     QPushButton,
     QScrollArea,
     QSplitter,
     QVBoxLayout,
     QWidget,
 )
-import timer_protection
-
-timer_protection.check_trial()
-
-print("App is running...")
 try:
     import ezdxf
 except Exception:
@@ -39,6 +41,82 @@ try:
     from ezdxf.enums import TextEntityAlignment
 except Exception:
     TextEntityAlignment = None
+
+
+ACCESS_WINDOW_DAYS = 10
+DEFAULT_PASSWORD_SHA256 = hashlib.sha256("coilhelvix".encode("utf-8")).hexdigest()
+
+
+def _access_state_path() -> Path:
+    appdata = os.getenv("APPDATA")
+    base_dir = Path(appdata) if appdata else (Path.home() / ".coil_helvix")
+    access_dir = base_dir / "CoilHelvix"
+    access_dir.mkdir(parents=True, exist_ok=True)
+    return access_dir / "access_state.json"
+
+
+def _load_or_create_first_run() -> datetime:
+    state_file = _access_state_path()
+    now_utc = datetime.now(timezone.utc)
+
+    if not state_file.exists():
+        state_file.write_text(
+            json.dumps({"first_run_utc": now_utc.isoformat()}, indent=2),
+            encoding="utf-8",
+        )
+        return now_utc
+
+    try:
+        payload = json.loads(state_file.read_text(encoding="utf-8"))
+        raw_first_run = str(payload.get("first_run_utc", "")).strip()
+        parsed = datetime.fromisoformat(raw_first_run)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        state_file.write_text(
+            json.dumps({"first_run_utc": now_utc.isoformat()}, indent=2),
+            encoding="utf-8",
+        )
+        return now_utc
+
+
+def _resolve_expiry_datetime(first_run_utc: datetime) -> datetime:
+    fixed_expiry = os.getenv("COIL_HELVIX_EXPIRY_DATE", "").strip()
+    if fixed_expiry:
+        try:
+            expiry_date = datetime.strptime(fixed_expiry, "%Y-%m-%d").date()
+            expiry_local = datetime(expiry_date.year, expiry_date.month, expiry_date.day, 23, 59, 59)
+            return expiry_local.replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    return first_run_utc + timedelta(days=ACCESS_WINDOW_DAYS)
+
+
+def _is_password_valid(entered_password: str) -> bool:
+    expected_hash = os.getenv("COIL_HELVIX_PASSWORD_SHA256", DEFAULT_PASSWORD_SHA256).strip().lower()
+    entered_hash = hashlib.sha256(entered_password.encode("utf-8")).hexdigest().lower()
+    return hmac.compare_digest(entered_hash, expected_hash)
+
+
+def _enforce_startup_access() -> tuple[bool, str | None]:
+    first_run_utc = _load_or_create_first_run()
+    expiry_utc = _resolve_expiry_datetime(first_run_utc)
+    now_utc = datetime.now(timezone.utc)
+
+    if now_utc >= expiry_utc:
+        return False, "Software access expired. Contact administrator."
+
+    password, ok = QInputDialog.getText(
+        None,
+        "Access Required",
+        "Enter password:",
+        QLineEdit.EchoMode.Password,
+    )
+    if not ok or not _is_password_valid(password):
+        return False, "Invalid password. Application will close."
+
+    return True, None
 
 
 @dataclass
@@ -2425,6 +2503,12 @@ class MainWindow(QMainWindow):
 def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName("Coil Helvix Offline Designer")
+
+    access_ok, access_message = _enforce_startup_access()
+    if not access_ok:
+        if access_message:
+            QMessageBox.critical(None, "Access Denied", access_message)
+        sys.exit(1)
 
     window = MainWindow()
     window.show()
