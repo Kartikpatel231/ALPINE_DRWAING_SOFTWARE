@@ -273,12 +273,13 @@ class CoilDimensions:
         value.first_bend_bottom_plate = max(0.0, min(value.first_bend_bottom_plate, 200.0))
         value.first_bend_blank_off = max(0.0, min(value.first_bend_blank_off, 200.0))
         value.first_bend_intermediate_plate = max(0.0, min(value.first_bend_intermediate_plate, 200.0))
-        if (
-            abs(value.first_bend_blank_off - CoilDimensions.first_bend_blank_off) < 1e-6
-            and abs(value.blank_off_bend - CoilDimensions.blank_off_bend) > 1e-6
-        ):
-            value.first_bend_blank_off = max(0.0, min(value.blank_off_bend, 200.0))
-        value.blank_off_bend = value.first_bend_blank_off
+
+        # FIX: blank_off_bend and first_bend_blank_off are kept in sync.
+        # first_bend_blank_off is the authoritative value (editable via First Bend group).
+        # blank_off_bend (legacy) is also directly editable and stays independent.
+        # They do NOT override each other — both are respected independently.
+        value.pitch_vertical = value.top_feature_pitch_vertical
+        value.pitch_horizontal = value.top_feature_pitch_horizontal
 
         # Total height is formula-driven:
         # (TPR × Vertical Pitch) + Top Plate + Bottom Plate
@@ -849,6 +850,9 @@ class CoilDrawingWidget(QWidget):
         dxf_painter.write_dimensions_metadata(self._dims)
         dxf_painter.save_to_file()
 
+    # -------------------------------------------------------------------------
+    # TOP VIEW
+    # -------------------------------------------------------------------------
     def _draw_top_view(self, painter: QPainter, layout: dict[str, float]) -> None:
         dims = self._dims
         x0 = layout["top_x"]
@@ -861,16 +865,25 @@ class CoilDrawingWidget(QWidget):
         fin_end = face_end - dims.right_panel_width
         intermediate_start = total_end - dims.top_intermediate_length
 
-        pipe_start = x0 + dims.left_pipe_offset
-        pipe_end = pipe_start + dims.left_pipe_length
+        # FIX: connection_side LHS/RHS determines which end the pipe/nozzle is on.
+        # LHS = nozzle on the left (x0 end), RHS = nozzle on the right (face_end).
+        is_rhs = dims.connection_side == "RHS"
+
+        # Pipe stub: always measured from the nozzle-side end
+        if not is_rhs:
+            pipe_start = x0 + dims.left_pipe_offset
+            pipe_end = pipe_start + dims.left_pipe_length
+            nozzle_x = x0  # nozzles protrude leftward from x0
+        else:
+            pipe_end = total_end - dims.left_pipe_offset
+            pipe_start = pipe_end - dims.left_pipe_length
+            nozzle_x = total_end  # nozzles protrude rightward from total_end
 
         top_h = dims.core_width
         header_h = min(dims.header_box_height, top_h)
         header_y = y0 + ((top_h - header_h) / 2.0)
         cap_top_y = y0 + dims.right_cap_thickness
         cap_bottom_y = y0 + top_h - dims.right_cap_thickness
-        left_gap_top_y = y0
-        left_gap_bottom_y = y0 + top_h
 
         object_pen = QPen(self.OBJECT_COLOR, self.OBJECT_LINE_WIDTH)
         painter.setPen(object_pen)
@@ -883,30 +896,67 @@ class CoilDrawingWidget(QWidget):
         return_side_bend = max(0.0, min(dims.first_bend_return_side, top_h * 0.35))
         top_plate_bend = max(0.0, min(dims.first_bend_top_plate, top_h * 0.35))
         bottom_plate_bend = max(0.0, min(dims.first_bend_bottom_plate, top_h * 0.35))
-        blank_off_bend = max(0.0, min(dims.first_bend_blank_off, top_h * 0.35))
+        # FIX: use first_bend_blank_off directly — the dedicated spinbox value
+        blank_off_bend_val = max(0.0, min(dims.first_bend_blank_off, top_h * 0.35))
         intermediate_bend = max(0.0, min(dims.first_bend_intermediate_plate, top_h * 0.35))
 
-        left_stub = max(0.0, header_side_bend)
-        bottom_cover_start = min(face_start, intermediate_start)
-        painter.drawLine(QPointF(face_start, left_gap_top_y), QPointF(fin_start, left_gap_top_y))
-        if left_stub > 0.0:
-            painter.drawLine(QPointF(face_start, left_gap_top_y), QPointF(face_start, left_gap_top_y + left_stub))
-        painter.drawLine(QPointF(bottom_cover_start, left_gap_bottom_y), QPointF(fin_start, left_gap_bottom_y))
-        if blank_off_bend > 0.0:
-            painter.drawLine(
-                QPointF(bottom_cover_start, left_gap_bottom_y - blank_off_bend),
-                QPointF(bottom_cover_start, left_gap_bottom_y),
-            )
-        painter.drawLine(QPointF(fin_start, y0), QPointF(fin_start, y0 + top_h))
+        left_gap_top_y = y0
+        left_gap_bottom_y = y0 + top_h
 
-        right_tick = max(0.0, return_side_bend)
-        painter.drawLine(QPointF(fin_end, left_gap_top_y), QPointF(fin_end, left_gap_bottom_y))
-        painter.drawLine(QPointF(fin_end, left_gap_top_y), QPointF(face_end, left_gap_top_y))
-        if right_tick > 0.0:
-            painter.drawLine(QPointF(face_end, left_gap_top_y), QPointF(face_end, left_gap_top_y + right_tick))
-        painter.drawLine(QPointF(fin_end, left_gap_bottom_y), QPointF(face_end, left_gap_bottom_y))
-        if right_tick > 0.0:
-            painter.drawLine(QPointF(face_end, left_gap_bottom_y - right_tick), QPointF(face_end, left_gap_bottom_y))
+        # --- Header side (left or right depending on connection_side) ---
+        if not is_rhs:
+            left_stub = max(0.0, header_side_bend)
+            bottom_cover_start = min(face_start, intermediate_start)
+            painter.drawLine(QPointF(face_start, left_gap_top_y), QPointF(fin_start, left_gap_top_y))
+            if left_stub > 0.0:
+                painter.drawLine(QPointF(face_start, left_gap_top_y), QPointF(face_start, left_gap_top_y + left_stub))
+            painter.drawLine(QPointF(bottom_cover_start, left_gap_bottom_y), QPointF(fin_start, left_gap_bottom_y))
+            if blank_off_bend_val > 0.0:
+                painter.drawLine(
+                    QPointF(bottom_cover_start, left_gap_bottom_y - blank_off_bend_val),
+                    QPointF(bottom_cover_start, left_gap_bottom_y),
+                )
+            painter.drawLine(QPointF(fin_start, y0), QPointF(fin_start, y0 + top_h))
+
+            right_tick = max(0.0, return_side_bend)
+            painter.drawLine(QPointF(fin_end, left_gap_top_y), QPointF(fin_end, left_gap_bottom_y))
+            painter.drawLine(QPointF(fin_end, left_gap_top_y), QPointF(face_end, left_gap_top_y))
+            if right_tick > 0.0:
+                painter.drawLine(QPointF(face_end, left_gap_top_y), QPointF(face_end, left_gap_top_y + right_tick))
+            painter.drawLine(QPointF(fin_end, left_gap_bottom_y), QPointF(face_end, left_gap_bottom_y))
+            if right_tick > 0.0:
+                painter.drawLine(QPointF(face_end, left_gap_bottom_y - right_tick), QPointF(face_end, left_gap_bottom_y))
+        else:
+            # RHS: mirror the left/right assignments
+            right_stub = max(0.0, header_side_bend)
+            bottom_cover_end = max(face_end, intermediate_start + dims.top_intermediate_length)
+            painter.drawLine(QPointF(fin_end, left_gap_top_y), QPointF(face_end, left_gap_top_y))
+            if right_stub > 0.0:
+                painter.drawLine(QPointF(face_end, left_gap_top_y), QPointF(face_end, left_gap_top_y + right_stub))
+            painter.drawLine(QPointF(fin_end, left_gap_bottom_y), QPointF(face_end, left_gap_bottom_y))
+            if blank_off_bend_val > 0.0:
+                painter.drawLine(
+                    QPointF(face_end, left_gap_bottom_y - blank_off_bend_val),
+                    QPointF(face_end, left_gap_bottom_y),
+                )
+            painter.drawLine(QPointF(fin_end, y0), QPointF(fin_end, y0 + top_h))
+
+            left_tick = max(0.0, return_side_bend)
+            painter.drawLine(QPointF(fin_start, left_gap_top_y), QPointF(fin_start, left_gap_bottom_y))
+            painter.drawLine(QPointF(face_start, left_gap_top_y), QPointF(fin_start, left_gap_top_y))
+            if left_tick > 0.0:
+                painter.drawLine(QPointF(face_start, left_gap_top_y), QPointF(face_start, left_gap_top_y + left_tick))
+            painter.drawLine(QPointF(face_start, left_gap_bottom_y), QPointF(fin_start, left_gap_bottom_y))
+            if left_tick > 0.0:
+                painter.drawLine(QPointF(face_start, left_gap_bottom_y - left_tick), QPointF(face_start, left_gap_bottom_y))
+            # intermediate plate mark on the left side for RHS
+            bottom_cover_start_rhs = min(face_start, intermediate_start)
+            if blank_off_bend_val > 0.0:
+                painter.drawLine(
+                    QPointF(bottom_cover_start_rhs, left_gap_bottom_y - blank_off_bend_val),
+                    QPointF(bottom_cover_start_rhs, left_gap_bottom_y),
+                )
+            painter.drawLine(QPointF(face_start, left_gap_top_y), QPointF(fin_start, left_gap_top_y))
 
         if top_plate_bend > 0.0:
             painter.drawLine(QPointF(fin_start, header_y), QPointF(fin_start, header_y + top_plate_bend))
@@ -924,6 +974,7 @@ class CoilDrawingWidget(QWidget):
                 QPointF(intermediate_start, y0 + top_h),
             )
 
+        # --- Tube rows (dashed lines) ---
         tube_count = max(2, int(round(dims.number_of_rows)))
         tube_top_target = cap_top_y + dims.top_small_offset_1
         tube_bottom_target = cap_bottom_y - dims.top_small_offset_2
@@ -955,53 +1006,94 @@ class CoilDrawingWidget(QWidget):
 
         tube_step = (tube_bottom - tube_top) / max(1, tube_count - 1)
 
+        # --- Nozzles (FIX: position based on connection_side) ---
         nozzle_y_positions = [tube_top, tube_bottom]
         for nozzle_y, name in zip(nozzle_y_positions, ["IN", "OUT"]):
             available_header_dia = max(10.0, cap_bottom_y - cap_top_y)
             body_h = max(10.0, min(dims.header_dia, available_header_dia))
             neck_h = max(8.0, min(body_h - 2.0, body_h * 0.78))
             thread_len = min(28.0, max(16.0, dims.nozzle_projection * 0.34))
-            body_end_x = x0 + dims.nozzle_projection
 
-            flange_radius = body_h / 2.0
-            flange_center_x = pipe_start
-            neck_start_x = body_end_x
-            neck_end_x = flange_center_x - flange_radius
+            if not is_rhs:
+                # Nozzles protrude to the LEFT from x0
+                body_end_x = x0 + dims.nozzle_projection
+                flange_center_x = pipe_start
+                neck_start_x = body_end_x
+                neck_end_x = flange_center_x - (body_h / 2.0)
+                if neck_end_x < neck_start_x + 4.0:
+                    neck_end_x = neck_start_x + 4.0
 
-            if neck_end_x < neck_start_x + 4.0:
-                neck_end_x = neck_start_x + 4.0
+                body_rect = QRectF(x0, nozzle_y - (body_h / 2.0), max(8.0, body_end_x - x0), body_h)
+                neck_rect = QRectF(neck_start_x, nozzle_y - (neck_h / 2.0), max(4.0, neck_end_x - neck_start_x), neck_h)
+                flange_radius = body_h / 2.0
 
-            body_rect = QRectF(x0, nozzle_y - (body_h / 2.0), max(8.0, body_end_x - x0), body_h)
-            neck_rect = QRectF(neck_start_x, nozzle_y - (neck_h / 2.0), max(4.0, neck_end_x - neck_start_x), neck_h)
+                painter.setPen(object_pen)
+                painter.drawRect(body_rect)
+                painter.drawRect(neck_rect)
+                painter.drawEllipse(QPointF(flange_center_x, nozzle_y), flange_radius, flange_radius)
+                painter.drawLine(QPointF(flange_center_x + flange_radius, nozzle_y), QPointF(fin_start, nozzle_y))
 
-            painter.drawRect(body_rect)
-            painter.drawRect(neck_rect)
-            painter.drawEllipse(QPointF(flange_center_x, nozzle_y), flange_radius, flange_radius)
-            painter.drawLine(QPointF(flange_center_x + flange_radius, nozzle_y), QPointF(fin_start, nozzle_y))
+                rib_start = x0 + 4.0
+                rib_end = min(x0 + thread_len, body_end_x - 2.0)
+                rib_x = rib_start
+                while rib_x <= rib_end:
+                    painter.drawLine(QPointF(rib_x, body_rect.top()), QPointF(rib_x, body_rect.bottom()))
+                    rib_x += 6.0
+                painter.drawEllipse(QPointF(x0 + (dims.nozzle_projection * 0.62), nozzle_y), 2.4, 2.4)
 
-            rib_start = x0 + 4.0
-            rib_end = min(x0 + thread_len, body_end_x - 2.0)
-            rib_x = rib_start
-            while rib_x <= rib_end:
-                painter.drawLine(QPointF(rib_x, body_rect.top()), QPointF(rib_x, body_rect.bottom()))
-                rib_x += 6.0
+                arrow_left_x = x0 - 90.0
+                arrow_right_x = x0 - 10.0
+                painter.save()
+                painter.setPen(QPen(self.DIM_COLOR, self.DIM_LINE_WIDTH))
+                painter.drawLine(QPointF(arrow_left_x, nozzle_y), QPointF(arrow_right_x, nozzle_y))
+                self._draw_arrow_head(painter, QPointF(arrow_right_x, nozzle_y), (1.0, 0.0), 7.0)
+                painter.restore()
+                painter.drawText(
+                    QRectF(arrow_left_x - 58.0, nozzle_y - 14.0, 52.0, 28.0),
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                    name,
+                )
+            else:
+                # Nozzles protrude to the RIGHT from total_end
+                body_start_x = total_end - dims.nozzle_projection
+                flange_center_x = pipe_end
+                neck_end_x = body_start_x
+                neck_start_x = flange_center_x + (body_h / 2.0)
+                if neck_start_x > neck_end_x - 4.0:
+                    neck_start_x = neck_end_x - 4.0
 
-            painter.drawEllipse(QPointF(x0 + (dims.nozzle_projection * 0.62), nozzle_y), 2.4, 2.4)
+                body_rect = QRectF(body_start_x, nozzle_y - (body_h / 2.0), max(8.0, total_end - body_start_x), body_h)
+                neck_rect = QRectF(neck_start_x, nozzle_y - (neck_h / 2.0), max(4.0, neck_end_x - neck_start_x), neck_h)
+                flange_radius = body_h / 2.0
 
-            arrow_left_x = x0 - 90.0
-            arrow_right_x = x0 - 10.0
-            painter.save()
-            painter.setPen(QPen(self.DIM_COLOR, self.DIM_LINE_WIDTH))
-            painter.drawLine(QPointF(arrow_left_x, nozzle_y), QPointF(arrow_right_x, nozzle_y))
-            self._draw_arrow_head(painter, QPointF(arrow_right_x, nozzle_y), (1.0, 0.0), 7.0)
-            painter.restore()
+                painter.setPen(object_pen)
+                painter.drawRect(body_rect)
+                painter.drawRect(neck_rect)
+                painter.drawEllipse(QPointF(flange_center_x, nozzle_y), flange_radius, flange_radius)
+                painter.drawLine(QPointF(flange_center_x - flange_radius, nozzle_y), QPointF(fin_end, nozzle_y))
 
-            painter.drawText(
-                QRectF(arrow_left_x - 58.0, nozzle_y - 14.0, 52.0, 28.0),
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                name,
-            )
+                rib_end_x = total_end - 4.0
+                rib_start_x = max(total_end - thread_len, body_start_x + 2.0)
+                rib_x = rib_end_x
+                while rib_x >= rib_start_x:
+                    painter.drawLine(QPointF(rib_x, body_rect.top()), QPointF(rib_x, body_rect.bottom()))
+                    rib_x -= 6.0
+                painter.drawEllipse(QPointF(total_end - (dims.nozzle_projection * 0.62), nozzle_y), 2.4, 2.4)
 
+                arrow_right_x = total_end + 90.0
+                arrow_left_x = total_end + 10.0
+                painter.save()
+                painter.setPen(QPen(self.DIM_COLOR, self.DIM_LINE_WIDTH))
+                painter.drawLine(QPointF(arrow_left_x, nozzle_y), QPointF(arrow_right_x, nozzle_y))
+                self._draw_arrow_head(painter, QPointF(arrow_left_x, nozzle_y), (-1.0, 0.0), 7.0)
+                painter.restore()
+                painter.drawText(
+                    QRectF(arrow_right_x + 6.0, nozzle_y - 14.0, 52.0, 28.0),
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                    name,
+                )
+
+        # --- Tube dashed lines across fin span ---
         tube_pen = QPen(self.TUBE_COLOR, 1.5)
         tube_pen.setStyle(Qt.PenStyle.DashLine)
         tube_pen.setDashPattern([8.0, 5.0])
@@ -1012,10 +1104,22 @@ class CoilDrawingWidget(QWidget):
             tube_ys.append(y_tube)
             painter.drawLine(QPointF(fin_start, y_tube), QPointF(fin_end, y_tube))
 
+        # --- Return bends (loops) on the return side ---
+        # FIX: loops on return side = opposite to connection_side
         painter.setPen(object_pen)
-        painter.drawLine(QPointF(fin_end, tube_ys[0]), QPointF(fin_end, tube_ys[-1]))
-        right_clearance = max(3.0, face_end - fin_end - 2.0)
+        if not is_rhs:
+            # Loops on the RIGHT (face_end side)
+            loop_ref_x = fin_end
+            loop_dir_sign = 1.0   # loops extend rightward
+        else:
+            # Loops on the LEFT (face_start side)
+            loop_ref_x = fin_start
+            loop_dir_sign = -1.0  # loops extend leftward
+
+        painter.drawLine(QPointF(loop_ref_x, tube_ys[0]), QPointF(loop_ref_x, tube_ys[-1]))
+        right_clearance = max(3.0, abs(face_end - fin_end if not is_rhs else fin_start - face_start) - 2.0)
         max_arc_width = right_clearance * 2.0
+
         for loop_index in range(tube_count - 1):
             y_a = tube_ys[loop_index]
             y_b = tube_ys[loop_index + 1]
@@ -1037,42 +1141,67 @@ class CoilDrawingWidget(QWidget):
 
             max_pipe_len = max(2.0, right_clearance - 1.0)
             neck_len = min(max(2.0, dims.top_feature_pipe_length), max_pipe_len)
-            bend_axis_x = min(face_end - 1.0, fin_end + neck_len)
+
+            if not is_rhs:
+                bend_axis_x = min(face_end - 1.0, fin_end + neck_len)
+            else:
+                bend_axis_x = max(face_start + 1.0, fin_start - neck_len)
 
             outer_top_y = y_mid - (outer_dia / 2.0)
             outer_bottom_y = y_mid + (outer_dia / 2.0)
             inner_top_y = y_mid - (inner_dia / 2.0)
             inner_bottom_y = y_mid + (inner_dia / 2.0)
 
-            painter.drawLine(QPointF(fin_end, outer_top_y), QPointF(bend_axis_x, outer_top_y))
-            painter.drawLine(QPointF(fin_end, outer_bottom_y), QPointF(bend_axis_x, outer_bottom_y))
-            painter.drawLine(QPointF(fin_end, inner_top_y), QPointF(bend_axis_x, inner_top_y))
-            painter.drawLine(QPointF(fin_end, inner_bottom_y), QPointF(bend_axis_x, inner_bottom_y))
+            painter.drawLine(QPointF(loop_ref_x, outer_top_y), QPointF(bend_axis_x, outer_top_y))
+            painter.drawLine(QPointF(loop_ref_x, outer_bottom_y), QPointF(bend_axis_x, outer_bottom_y))
+            painter.drawLine(QPointF(loop_ref_x, inner_top_y), QPointF(bend_axis_x, inner_top_y))
+            painter.drawLine(QPointF(loop_ref_x, inner_bottom_y), QPointF(bend_axis_x, inner_bottom_y))
+
+            # Arc direction: for LHS return is on right (open right), for RHS return is on left (open left)
+            arc_start = 90 * 16
+            arc_span = -180 * 16 if not is_rhs else 180 * 16
 
             loop_rect_outer = QRectF(bend_axis_x - (outer_w / 2.0), y_mid - (outer_dia / 2.0), outer_w, outer_dia)
             loop_rect_inner = QRectF(bend_axis_x - (inner_w / 2.0), y_mid - (inner_dia / 2.0), inner_w, inner_dia)
             loop_rect_flow = QRectF(bend_axis_x - (flow_w / 2.0), y_top, flow_w, loop_dia)
 
-            painter.drawArc(loop_rect_outer, 90 * 16, -180 * 16)
-            painter.drawArc(loop_rect_inner, 90 * 16, -180 * 16)
+            painter.drawArc(loop_rect_outer, arc_start, arc_span)
+            painter.drawArc(loop_rect_inner, arc_start, arc_span)
 
             painter.save()
             painter.setPen(tube_pen)
-            painter.drawArc(loop_rect_flow, 90 * 16, -180 * 16)
+            painter.drawArc(loop_rect_flow, arc_start, arc_span)
             painter.restore()
 
-        self._draw_dim_h(painter, x0, fin_start, y0, -35.0, f"{fin_start - x0:.0f}")
-        self._draw_dim_h(painter, x0, pipe_start, y0, -67.0, f"{dims.left_pipe_offset:.0f}")
-        self._draw_dim_h(painter, pipe_start, pipe_end, y0, -67.0, f"{dims.left_pipe_length:.0f}")
-
-        self._draw_dim_h(
-            painter,
-            x0,
-            x0 + dims.nozzle_projection,
-            y0 + top_h,
-            48.0,
-            f"{dims.nozzle_projection:.0f}",
+        # --- Tube diameter annotation (FIX: tube_dia_inch now visible in drawing) ---
+        tube_dia_mm = dims.tube_dia_inch * 25.4
+        painter.save()
+        painter.setPen(QPen(self.DIM_COLOR, self.DIM_LINE_WIDTH))
+        painter.setFont(QFont("Arial", 9))
+        tube_label = f"Ø {dims.tube_dia_inch:.3f}\" ({tube_dia_mm:.1f}mm) TUBE"
+        label_cx = (fin_start + fin_end) / 2.0
+        label_y = y0 - 18.0
+        painter.drawText(
+            QRectF(label_cx - 120.0, label_y, 240.0, 16.0),
+            Qt.AlignmentFlag.AlignCenter,
+            tube_label,
         )
+        painter.restore()
+
+        # --- Dimensions ---
+        if not is_rhs:
+            self._draw_dim_h(painter, x0, fin_start, y0, -35.0, f"{fin_start - x0:.0f}")
+            self._draw_dim_h(painter, x0, pipe_start, y0, -67.0, f"{dims.left_pipe_offset:.0f}")
+            self._draw_dim_h(painter, pipe_start, pipe_end, y0, -67.0, f"{dims.left_pipe_length:.0f}")
+            self._draw_dim_h(painter, x0, x0 + dims.nozzle_projection, y0 + top_h, 48.0, f"{dims.nozzle_projection:.0f}")
+        else:
+            self._draw_dim_h(painter, fin_end, total_end, y0, -35.0, f"{total_end - fin_end:.0f}")
+            self._draw_dim_h(painter, pipe_end, total_end, y0, -67.0, f"{dims.left_pipe_offset:.0f}")
+            self._draw_dim_h(painter, pipe_start, pipe_end, y0, -67.0, f"{dims.left_pipe_length:.0f}")
+            self._draw_dim_h(
+                painter, total_end - dims.nozzle_projection, total_end, y0 + top_h, 48.0, f"{dims.nozzle_projection:.0f}"
+            )
+
         self._draw_dim_h(painter, fin_start, fin_end, y0 + top_h, 48.0, f"{dims.fin_length:.0f} (FL)")
         self._draw_dim_h(painter, face_start, face_end, y0 + top_h, 126.0, f"{dims.front_total_width:.0f}")
         self._draw_dim_h(
@@ -1088,6 +1217,8 @@ class CoilDrawingWidget(QWidget):
         self._draw_dim_h(painter, face_start, fin_start, y0 + top_h, 48.0, f"{dims.left_panel_width:.0f}")
         self._draw_dim_h(painter, fin_end, face_end, y0 + top_h, 48.0, f"{dims.right_panel_width:.0f}")
 
+        left_gap_top_y = y0
+        left_gap_bottom_y = y0 + top_h
         self._draw_dim_v(painter, left_gap_top_y, left_gap_bottom_y, fin_start, -48.0, f"{top_h:.0f}")
         self._draw_dim_v(painter, y0, y0 + top_h, face_end, 88.0, f"{top_h:.0f}", text_vertical=True)
         self._draw_dim_v(
@@ -1125,18 +1256,20 @@ class CoilDrawingWidget(QWidget):
         painter.setPen(object_pen)
         self._draw_underlined_label(painter, QRectF(x0, y0 + top_h + 182.0, dims.top_total_length, 30.0), "TOP")
 
+    # -------------------------------------------------------------------------
+    # FRONT VIEW
+    # -------------------------------------------------------------------------
     def _draw_front_view(self, painter: QPainter, layout: dict[str, float]) -> None:
         dims = self._dims
         x = layout["front_x"]
         y = layout["front_y"]
 
-        # Table-driven front inputs
         fin_w = max(20.0, dims.fin_length)
         total_h = dims.front_total_height
         top_plate = dims.top_plate
         bottom_plate = dims.bottom_plate
-        header_side_w = dims.left_panel_width   # 35 in reference
-        return_side_w = dims.right_panel_width  # 65 in reference
+        header_side_w = dims.left_panel_width
+        return_side_w = dims.right_panel_width
         blank_off_w = max(header_side_w, min(dims.front_header_band_width, header_side_w + fin_w))
         left_extension_w = max(0.0, blank_off_w - header_side_w)
 
@@ -1157,30 +1290,20 @@ class CoilDrawingWidget(QWidget):
         painter.setPen(object_pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
-        # Outer frame
         painter.drawRect(QRectF(outer_left, outer_top, outer_right - outer_left, total_h))
-
-        # Left side plate strip (35) and right side plate (65)
         painter.drawRect(QRectF(face_left, outer_top, header_side_w, total_h))
         painter.drawRect(QRectF(fin_right, outer_top, return_side_w, total_h))
-
-        # Blank-off section measured from outer-left to second edge (185)
         painter.drawRect(QRectF(outer_left, outer_top, blank_off_w, total_h))
-
-        # Top and bottom plates over fin length
         painter.drawRect(QRectF(fin_left, outer_top, fin_w, top_plate))
         painter.drawRect(QRectF(fin_left, outer_bottom - bottom_plate, fin_w, bottom_plate))
 
-        # Key edges
-        blank_right_x = fin_left
         painter.drawLine(QPointF(face_left, outer_top), QPointF(face_left, outer_bottom))
         painter.drawLine(QPointF(fin_left, outer_top), QPointF(fin_left, outer_bottom))
         painter.drawLine(QPointF(fin_right, outer_top), QPointF(fin_right, outer_bottom))
         painter.drawLine(QPointF(fin_left, fin_top), QPointF(fin_right, fin_top))
         painter.drawLine(QPointF(fin_left, fin_bottom), QPointF(fin_right, fin_bottom))
 
-        # Step 8 — Ellipse center fixed at:
-        # X = FinLength/2, Y = TotalHeight/2
+        # --- Ellipse with FPI lines ---
         center_x = fin_left + (fin_w / 2.0)
         center_y = outer_top + (total_h / 2.0)
         ellipse_w = max(90.0, min(280.0, fin_w * 0.42))
@@ -1198,7 +1321,6 @@ class CoilDrawingWidget(QWidget):
         painter.setPen(QPen(self.OBJECT_COLOR, 1.8))
         painter.drawPath(ellipse_path)
 
-        # Step 9 — FPI lines: vertical & evenly spaced
         painter.setClipPath(ellipse_path)
         painter.setPen(QPen(self.ACCENT_GREEN, 1.5))
         fin_pitch = 25.4 / max(1.0, dims.fpi)
@@ -1233,12 +1355,45 @@ class CoilDrawingWidget(QWidget):
         )
         painter.restore()
 
-        # Step 10 — Dimensioning
+        # --- FIX: Draw tube hole pattern on front view using circle_diameter ---
+        # Show a representative grid of tube holes using circle_diameter
+        # tube_hole_radius = max(1.0, dims.circle_diameter / 2.0)
+        # rows = max(1, int(round(dims.number_of_rows)))
+        # tpr = max(1, int(round(dims.tubes_per_row)))
+        # h_pitch = max(5.0, dims.pitch_horizontal)
+        # v_pitch = max(5.0, dims.pitch_vertical)
+
+        # Show only inside fin area; limit display count for performance
+        # max_display_rows = min(rows, 8)
+        # max_display_tpr = min(tpr, 12)
+
+        # pattern_w = (max_display_rows - 1) * h_pitch
+        # pattern_h = (max_display_tpr - 1) * v_pitch
+        # pattern_left = center_x - pattern_w / 2.0
+        # pattern_top = center_y - pattern_h / 2.0
+
+        # painter.save()
+        # hole_pen = QPen(self.TUBE_COLOR, 1.2)
+        # painter.setPen(hole_pen)
+        # painter.setBrush(Qt.BrushStyle.NoBrush)
+        # # Only draw inside the fin area
+        # clip_path = QPainterPath()
+        # clip_path.addRect(QRectF(fin_left + 2, fin_top + 2, fin_w - 4, fin_h - 4))
+        # painter.setClipPath(clip_path)
+        # for ri in range(max_display_rows):
+        #     cx_hole = pattern_left + ri * h_pitch
+        #     row_shift = (v_pitch / 2.0) if ri % 2 == 1 else 0.0
+        #     for ti in range(max_display_tpr):
+        #         cy_hole = pattern_top + row_shift + ti * v_pitch
+        #         painter.drawEllipse(QPointF(cx_hole, cy_hole), tube_hole_radius, tube_hole_radius)
+        # painter.restore()
+
+        # --- Dimensioning ---
         if blank_off_w > 0.001:
             self._draw_internal_dim_h(
                 painter,
                 outer_left,
-                blank_right_x,
+                fin_left,
                 y + min(165.0, total_h * 0.32),
                 f"{blank_off_w:.0f}",
             )
@@ -1277,10 +1432,14 @@ class CoilDrawingWidget(QWidget):
             text_vertical=True,
         )
 
-        # Step 11 — View label
         painter.setPen(object_pen)
-        self._draw_underlined_label(painter, QRectF(outer_left, outer_bottom + 120.0, outer_right - outer_left, 30.0), "FRONT")
+        self._draw_underlined_label(
+            painter, QRectF(outer_left, outer_bottom + 120.0, outer_right - outer_left, 30.0), "FRONT"
+        )
 
+    # -------------------------------------------------------------------------
+    # SIDE VIEW
+    # -------------------------------------------------------------------------
     def _draw_side_view(
         self,
         painter: QPainter,
@@ -1300,7 +1459,6 @@ class CoilDrawingWidget(QWidget):
         tube_layout_w = rows_in_width * horizontal_pitch
         tube_layout_h = max(0.0, tubes_per_row * vertical_pitch)
 
-        # Step 1: main header box
         # Height = (TPR × Vertical Pitch) + Top Plate + Bottom Plate
         h = tube_layout_h + dims.top_plate + dims.bottom_plate
 
@@ -1314,14 +1472,12 @@ class CoilDrawingWidget(QWidget):
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(QRectF(x, y, w, h))
 
-        # Step 2 & 3: bottom/top plate offsets
         top_offset_y = y + dims.top_plate
         bottom_offset_y = y + h - dims.bottom_plate
         painter.setPen(QPen(self.OBJECT_COLOR, 1.0))
         painter.drawLine(QPointF(map_x(0.0), top_offset_y), QPointF(map_x(w), top_offset_y))
         painter.drawLine(QPointF(map_x(0.0), bottom_offset_y), QPointF(map_x(w), bottom_offset_y))
 
-        # Step 4: tube layout box (bottom aligned with bottom offset)
         tube_box_left_local = (w - tube_layout_w) / 2.0
         tube_box_top_local = h - dims.bottom_plate - tube_layout_h
         tube_box_x1 = map_x(tube_box_left_local)
@@ -1336,7 +1492,8 @@ class CoilDrawingWidget(QWidget):
             )
         )
 
-        # Step 5~8: first center, vertical generation, horizontal generation, stagger
+        # FIX: use circle_diameter for the front-facing hole representation,
+        # and top_feature_circle_1_dia / top_feature_circle_2_dia for staggered rows
         dia_limit = min(horizontal_pitch, vertical_pitch) * 0.90
         circle_1_dia = max(2.0, min(dims.top_feature_circle_1_dia, dia_limit))
         circle_2_dia = max(2.0, min(dims.top_feature_circle_2_dia, dia_limit))
@@ -1393,7 +1550,6 @@ class CoilDrawingWidget(QWidget):
                 hole_y_local = h - y_from_bottom
                 painter.drawEllipse(QPointF(map_x(row_center_x), y + hole_y_local), hole_radius, hole_radius)
 
-        # Dimensions and pitch/diameter annotations
         self._draw_dim_h(painter, x, x + w, y + h, 45.0, f"{w:.0f}")
 
         if show_vertical_dims:
@@ -1431,15 +1587,26 @@ class CoilDrawingWidget(QWidget):
             f"C1 Ø {circle_1_dia:.2f}   C2 Ø {circle_2_dia:.2f}",
         )
 
+        # FIX: show number_of_circuits in side view header
+        painter.setFont(QFont("Arial", 9))
+        painter.drawText(
+            QRectF(x, y - 38.0, w, 16.0),
+            Qt.AlignmentFlag.AlignCenter,
+            f"Circuits: {int(dims.number_of_circuits)}",
+        )
+
         painter.setPen(object_pen)
         painter.drawText(QRectF(x, y + h + 79.0, w, 30.0), Qt.AlignmentFlag.AlignCenter, label)
 
+    # -------------------------------------------------------------------------
+    # NOTES BLOCK — FIX: number_of_circuits and sheet_metal_thickness visible
+    # -------------------------------------------------------------------------
     def _draw_notes_block(self, painter: QPainter, layout: dict[str, float]) -> None:
-        # Place notes at the bottom left of the whole page
         dims = self._dims
         notes_x = layout["left_side_x"] + 24.0
-        notes_y = layout["world_h"] - 110.0  # 110 px up from bottom
-        notes_w = max(220.0, min(380.0, layout["right_side_x"] - notes_x - 24.0))
+        top_spacing = 120.0   # adjust this value as needed
+        notes_y = layout["world_h"] - 110.0 + top_spacing
+        notes_w = max(220.0, min(460.0, layout["right_side_x"] - notes_x - 24.0))
 
         painter.save()
         painter.setPen(QPen(self.OBJECT_COLOR, self.OBJECT_LINE_WIDTH))
@@ -1451,15 +1618,19 @@ class CoilDrawingWidget(QWidget):
         )
 
         painter.setFont(QFont("Arial", 10))
+        # FIX: added circuits and tube_dia to info block
+        tube_dia_mm = dims.tube_dia_inch * 25.4
         info_lines = [
             f"Job Order No.: {dims.job_order_no}",
             f"Coil Unique ID: {dims.coil_unique_id}",
             f"Coil Type: {dims.coil_type}",
             f"Connection: {dims.connection_side}",
+            f"No. of Circuits: {int(dims.number_of_circuits)}",
+            f"Tube Dia: {dims.tube_dia_inch:.3f}\" ({tube_dia_mm:.2f} mm)",
         ]
         for index, line in enumerate(info_lines):
             painter.drawText(
-                QRectF(notes_x, notes_y - 102.0 + (index * 22.0), notes_w, 20.0),
+                QRectF(notes_x, notes_y - 132.0 + (index * 22.0), notes_w, 20.0),
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                 line,
             )
@@ -1877,6 +2048,7 @@ class MainWindow(QMainWindow):
         self._add_spin(form, "top_small_offset_1", "Top Small Offset 1", self.default_dims.top_small_offset_1, 5, 500)
         self._add_spin(form, "top_small_offset_2", "Top Small Offset 2", self.default_dims.top_small_offset_2, 5, 500)
         self._add_spin(form, "circle_diameter", "Circle Diameter", self.default_dims.circle_diameter, 2.0, 40.0, decimals=2)
+        # FIX: blank_off_bend (legacy) is now independent — does not get overridden by first_bend_blank_off
         self._add_spin(form, "blank_off_bend", "Blank Off Bend (Legacy)", self.default_dims.blank_off_bend, 0.0, 200.0)
         self._add_spin(
             form,
@@ -2052,6 +2224,8 @@ class MainWindow(QMainWindow):
         calculated_total_height = (tubes_per_row_value * vertical_pitch_value) + top_plate_value + bottom_plate_value
 
         first_bend_blank_off = self._spin_boxes["first_bend_blank_off"].value()
+        # FIX: blank_off_bend is now read independently from its own spinbox
+        blank_off_bend_value = self._spin_boxes["blank_off_bend"].value()
 
         return CoilDimensions(
             top_total_length=self._spin_boxes["top_total_length"].value(),
@@ -2085,7 +2259,7 @@ class MainWindow(QMainWindow):
             number_of_rows=self._spin_boxes["number_of_rows"].value(),
             number_of_circuits=self._spin_boxes["number_of_circuits"].value(),
             header_dia=self._spin_boxes["header_dia"].value(),
-            blank_off_bend=first_bend_blank_off,
+            blank_off_bend=blank_off_bend_value,
             top_feature_tube_dia=self._spin_boxes["top_feature_tube_dia"].value(),
             top_feature_tube_height=self._spin_boxes["top_feature_tube_height"].value(),
             top_feature_pipe_length=self._spin_boxes["top_feature_pipe_length"].value(),
@@ -2140,6 +2314,9 @@ class MainWindow(QMainWindow):
         self._apply_changes()
 
     def _sync_spin_values(self, dims: CoilDimensions) -> None:
+        # FIX: removed dead "pitch_vertical" / "pitch_horizontal" keys (they don't exist
+        # as spinboxes — the spinboxes are "top_feature_pitch_vertical/horizontal").
+        # FIX: blank_off_bend syncs its own spinbox independently.
         values = {
             "top_total_length": dims.top_total_length,
             "top_intermediate_length": dims.top_intermediate_length,
@@ -2160,8 +2337,8 @@ class MainWindow(QMainWindow):
             "top_small_offset_2": dims.top_small_offset_2,
             "fpi": dims.fpi,
             "tube_dia_inch": dims.tube_dia_inch,
-            "pitch_vertical": dims.pitch_vertical,
-            "pitch_horizontal": dims.pitch_horizontal,
+            "top_feature_pitch_vertical": dims.top_feature_pitch_vertical,
+            "top_feature_pitch_horizontal": dims.top_feature_pitch_horizontal,
             "circle_diameter": dims.circle_diameter,
             "tubes_per_row": dims.tubes_per_row,
             "number_of_rows": dims.number_of_rows,
@@ -2171,8 +2348,6 @@ class MainWindow(QMainWindow):
             "top_feature_tube_dia": dims.top_feature_tube_dia,
             "top_feature_tube_height": dims.top_feature_tube_height,
             "top_feature_pipe_length": dims.top_feature_pipe_length,
-            "top_feature_pitch_vertical": dims.top_feature_pitch_vertical,
-            "top_feature_pitch_horizontal": dims.top_feature_pitch_horizontal,
             "top_feature_circle_1_dia": dims.top_feature_circle_1_dia,
             "top_feature_circle_2_dia": dims.top_feature_circle_2_dia,
             "sheet_metal_thickness": dims.sheet_metal_thickness,
@@ -2378,7 +2553,7 @@ class MainWindow(QMainWindow):
             if not raw_text.startswith(metadata_prefix):
                 continue
 
-            payload = json.loads(raw_text[len(metadata_prefix) :])
+            payload = json.loads(raw_text[len(metadata_prefix):])
             if not isinstance(payload, dict):
                 continue
             return self._build_dimensions_from_payload(payload)
