@@ -808,7 +808,9 @@ class CoilDrawingWidget(QWidget):
         top_x = (front_x + front_total_draw_w) - dims.top_total_length
 
         world_w = right_side_x + dims.core_width + 90.0
-        world_h = front_y + dims.front_total_height + 240.0
+        front_bottom = front_y + dims.front_total_height
+        notes_reserved_height = 460.0
+        world_h = front_bottom + notes_reserved_height
 
         return {
             "left_side_x": left_side_x,
@@ -824,7 +826,6 @@ class CoilDrawingWidget(QWidget):
     def _draw_scene(self, painter: QPainter, layout: dict[str, float]) -> None:
         self._draw_top_view(painter, layout)
         self._draw_front_view(painter, layout)
-        self._draw_notes_block(painter, layout)
         self._draw_side_view(
             painter,
             x=layout["left_side_x"],
@@ -841,6 +842,7 @@ class CoilDrawingWidget(QWidget):
             show_vertical_dims=True,
             mirror=True,
         )
+        self._draw_notes_block(painter, layout)
 
     def export_to_dxf(self, file_path: str) -> None:
         layout = self._layout_data()
@@ -1438,18 +1440,12 @@ class CoilDrawingWidget(QWidget):
         # Place notes at the bottom left of the whole page
         dims = self._dims
         notes_x = layout["left_side_x"] + 24.0
-        notes_y = layout["world_h"] - 110.0  # 110 px up from bottom
+        front_bottom = layout["front_y"] + dims.front_total_height
+        notes_y = front_bottom + 168.0
         notes_w = max(220.0, min(380.0, layout["right_side_x"] - notes_x - 24.0))
 
         painter.save()
         painter.setPen(QPen(self.OBJECT_COLOR, self.OBJECT_LINE_WIDTH))
-        painter.setFont(QFont("Arial", 11))
-        painter.drawText(
-            QRectF(notes_x, notes_y, notes_w, 22.0),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            "Notes:-",
-        )
-
         painter.setFont(QFont("Arial", 10))
         info_lines = [
             f"Job Order No.: {dims.job_order_no}",
@@ -1459,11 +1455,20 @@ class CoilDrawingWidget(QWidget):
         ]
         for index, line in enumerate(info_lines):
             painter.drawText(
-                QRectF(notes_x, notes_y - 102.0 + (index * 22.0), notes_w, 20.0),
+                QRectF(notes_x, notes_y + (index * 22.0), notes_w, 20.0),
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                 line,
             )
 
+        notes_title_y = notes_y + (len(info_lines) * 22.0) + 18.0
+        painter.setFont(QFont("Arial", 11))
+        painter.drawText(
+            QRectF(notes_x, notes_title_y, notes_w, 22.0),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            "Notes:-",
+        )
+
+        painter.setFont(QFont("Arial", 10))
         note_lines = [
             "1. FIN MATERIAL SHOULD BE PLAIN ALUMINIUM (0.11MM THICKNESS).",
             f"2. CASING MATERIAL SHOULD BE G.I. - {dims.sheet_metal_thickness:.2f}MM THICKNESS.",
@@ -1471,7 +1476,7 @@ class CoilDrawingWidget(QWidget):
         ]
         for index, line in enumerate(note_lines):
             painter.drawText(
-                QRectF(notes_x, notes_y + 24.0 + (index * 24.0), notes_w, 22.0),
+                QRectF(notes_x, notes_title_y + 24.0 + (index * 24.0), notes_w, 22.0),
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                 line,
             )
