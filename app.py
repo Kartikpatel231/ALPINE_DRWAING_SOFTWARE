@@ -144,11 +144,14 @@ class CoilDimensions:
     pitch_vertical: float = 40.0
     pitch_horizontal: float = 34.64
     connection_side: str = "LHS"
+    job_order_no: str = "252600912"
+    coil_unique_id: str = "25001232"
+    coil_type: str = "CHW"
     circle_diameter: float = 8.4
     tubes_per_row: float = 35.0
     number_of_rows: float = 6.0
     number_of_circuits: float = 13.0
-    header_dia: float = 170.0
+    header_dia: float = 12.7
     blank_off_bend: float = 12.0
     top_feature_tube_dia: float = 15.88
     top_feature_tube_height: float = 173.2
@@ -253,7 +256,7 @@ class CoilDimensions:
         value.tubes_per_row = max(1.0, min(value.tubes_per_row, 300.0))
         value.number_of_rows = max(1.0, min(value.number_of_rows, 40.0))
         value.number_of_circuits = max(1.0, min(value.number_of_circuits, 100.0))
-        value.header_dia = max(20.0, min(value.header_dia, 500.0))
+        value.header_dia = max(2.0, min(value.header_dia, 500.0))
         value.blank_off_bend = max(0.0, min(value.blank_off_bend, 200.0))
         value.top_feature_tube_dia = max(2.0, min(value.top_feature_tube_dia, 80.0))
         max_tube_height = max(10.0, value.core_width - (2.0 * value.right_cap_thickness))
@@ -285,6 +288,10 @@ class CoilDimensions:
         if normalized_connection not in {"LHS", "RHS"}:
             normalized_connection = "LHS"
         value.connection_side = normalized_connection
+
+        value.job_order_no = str(value.job_order_no).strip() or CoilDimensions.job_order_no
+        value.coil_unique_id = str(value.coil_unique_id).strip() or CoilDimensions.coil_unique_id
+        value.coil_type = str(value.coil_type).strip().upper() or CoilDimensions.coil_type
         return value
 
 
@@ -872,23 +879,50 @@ class CoilDrawingWidget(QWidget):
         painter.drawLine(QPointF(fin_start, header_y), QPointF(fin_end, header_y))
         painter.drawLine(QPointF(fin_start, header_y + header_h), QPointF(fin_end, header_y + header_h))
 
-        left_stub = max(2.0, min(dims.blank_off_bend, top_h * 0.25))
+        header_side_bend = max(0.0, min(dims.first_bend_header_side, top_h * 0.35))
+        return_side_bend = max(0.0, min(dims.first_bend_return_side, top_h * 0.35))
+        top_plate_bend = max(0.0, min(dims.first_bend_top_plate, top_h * 0.35))
+        bottom_plate_bend = max(0.0, min(dims.first_bend_bottom_plate, top_h * 0.35))
+        blank_off_bend = max(0.0, min(dims.first_bend_blank_off, top_h * 0.35))
+        intermediate_bend = max(0.0, min(dims.first_bend_intermediate_plate, top_h * 0.35))
+
+        left_stub = max(0.0, header_side_bend)
         bottom_cover_start = min(face_start, intermediate_start)
         painter.drawLine(QPointF(face_start, left_gap_top_y), QPointF(fin_start, left_gap_top_y))
-        painter.drawLine(QPointF(face_start, left_gap_top_y), QPointF(face_start, left_gap_top_y + left_stub))
+        if left_stub > 0.0:
+            painter.drawLine(QPointF(face_start, left_gap_top_y), QPointF(face_start, left_gap_top_y + left_stub))
         painter.drawLine(QPointF(bottom_cover_start, left_gap_bottom_y), QPointF(fin_start, left_gap_bottom_y))
-        painter.drawLine(
-            QPointF(bottom_cover_start, left_gap_bottom_y - left_stub),
-            QPointF(bottom_cover_start, left_gap_bottom_y),
-        )
+        if blank_off_bend > 0.0:
+            painter.drawLine(
+                QPointF(bottom_cover_start, left_gap_bottom_y - blank_off_bend),
+                QPointF(bottom_cover_start, left_gap_bottom_y),
+            )
         painter.drawLine(QPointF(fin_start, y0), QPointF(fin_start, y0 + top_h))
 
-        right_tick = max(2.0, min(dims.blank_off_bend, top_h * 0.25))
+        right_tick = max(0.0, return_side_bend)
         painter.drawLine(QPointF(fin_end, left_gap_top_y), QPointF(fin_end, left_gap_bottom_y))
         painter.drawLine(QPointF(fin_end, left_gap_top_y), QPointF(face_end, left_gap_top_y))
-        painter.drawLine(QPointF(face_end, left_gap_top_y), QPointF(face_end, left_gap_top_y + right_tick))
+        if right_tick > 0.0:
+            painter.drawLine(QPointF(face_end, left_gap_top_y), QPointF(face_end, left_gap_top_y + right_tick))
         painter.drawLine(QPointF(fin_end, left_gap_bottom_y), QPointF(face_end, left_gap_bottom_y))
-        painter.drawLine(QPointF(face_end, left_gap_bottom_y - right_tick), QPointF(face_end, left_gap_bottom_y))
+        if right_tick > 0.0:
+            painter.drawLine(QPointF(face_end, left_gap_bottom_y - right_tick), QPointF(face_end, left_gap_bottom_y))
+
+        if top_plate_bend > 0.0:
+            painter.drawLine(QPointF(fin_start, header_y), QPointF(fin_start, header_y + top_plate_bend))
+            painter.drawLine(QPointF(fin_end, header_y), QPointF(fin_end, header_y + top_plate_bend))
+
+        if bottom_plate_bend > 0.0:
+            bottom_y = header_y + header_h
+            painter.drawLine(QPointF(fin_start, bottom_y - bottom_plate_bend), QPointF(fin_start, bottom_y))
+            painter.drawLine(QPointF(fin_end, bottom_y - bottom_plate_bend), QPointF(fin_end, bottom_y))
+
+        if intermediate_bend > 0.0:
+            painter.drawLine(QPointF(intermediate_start, y0), QPointF(intermediate_start, y0 + intermediate_bend))
+            painter.drawLine(
+                QPointF(intermediate_start, y0 + top_h - intermediate_bend),
+                QPointF(intermediate_start, y0 + top_h),
+            )
 
         tube_count = max(2, int(round(dims.number_of_rows)))
         tube_top_target = cap_top_y + dims.top_small_offset_1
@@ -923,7 +957,8 @@ class CoilDrawingWidget(QWidget):
 
         nozzle_y_positions = [tube_top, tube_bottom]
         for nozzle_y, name in zip(nozzle_y_positions, ["IN", "OUT"]):
-            body_h = max(10.0, min(30.0, dims.header_dia / 9.5))
+            available_header_dia = max(10.0, cap_bottom_y - cap_top_y)
+            body_h = max(10.0, min(dims.header_dia, available_header_dia))
             neck_h = max(8.0, min(body_h - 2.0, body_h * 0.78))
             thread_len = min(28.0, max(16.0, dims.nozzle_projection * 0.34))
             body_end_x = x0 + dims.nozzle_projection
@@ -1323,6 +1358,9 @@ class CoilDrawingWidget(QWidget):
             QPointF(map_x(w - band_margin_x), y + h - band_offset_y),
         )
 
+        hole_pen = QPen(self.MAGENTA, 1.1)
+        painter.setPen(hole_pen)
+
         first_center_x = tube_box_left_local + (horizontal_pitch * 0.5)
         y_start_from_bottom = dims.bottom_plate + (vertical_pitch * 0.5)
         y_bottom_limit = dims.bottom_plate
@@ -1413,6 +1451,19 @@ class CoilDrawingWidget(QWidget):
         )
 
         painter.setFont(QFont("Arial", 10))
+        info_lines = [
+            f"Job Order No.: {dims.job_order_no}",
+            f"Coil Unique ID: {dims.coil_unique_id}",
+            f"Coil Type: {dims.coil_type}",
+            f"Connection: {dims.connection_side}",
+        ]
+        for index, line in enumerate(info_lines):
+            painter.drawText(
+                QRectF(notes_x, notes_y - 102.0 + (index * 22.0), notes_w, 20.0),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                line,
+            )
+
         note_lines = [
             "1. FIN MATERIAL SHOULD BE PLAIN ALUMINIUM (0.11MM THICKNESS).",
             f"2. CASING MATERIAL SHOULD BE G.I. - {dims.sheet_metal_thickness:.2f}MM THICKNESS.",
@@ -1584,6 +1635,7 @@ class MainWindow(QMainWindow):
         self.default_dims = CoilDimensions()
         self._spin_boxes: dict[str, QDoubleSpinBox] = {}
         self._direct_spin_boxes: dict[str, QDoubleSpinBox] = {}
+        self._text_inputs: dict[str, QLineEdit] = {}
         self._connection_side_combo: QComboBox | None = None
         self._is_syncing_inputs = False
         self._is_syncing_direct_inputs = False
@@ -1610,6 +1662,7 @@ class MainWindow(QMainWindow):
         content_layout.setContentsMargins(10, 10, 10, 10)
         content_layout.setSpacing(10)
 
+        content_layout.addWidget(self._build_identity_group())
         content_layout.addWidget(self._build_top_group())
         content_layout.addWidget(self._build_front_group())
         content_layout.addWidget(self._build_side_group())
@@ -1626,6 +1679,15 @@ class MainWindow(QMainWindow):
         scroll.setWidget(content)
         scroll.setMinimumWidth(330)
         return scroll
+
+    def _build_identity_group(self) -> QGroupBox:
+        group = QGroupBox("Order Details")
+        form = QFormLayout(group)
+
+        self._add_text_input(form, "job_order_no", "Job Order No.", self.default_dims.job_order_no)
+        self._add_text_input(form, "coil_unique_id", "Coil Unique ID", self.default_dims.coil_unique_id)
+        self._add_text_input(form, "coil_type", "Coil Type", self.default_dims.coil_type)
+        return group
 
     def _build_top_group(self) -> QGroupBox:
         group = QGroupBox("Main Specs (As Diagram)")
@@ -1652,7 +1714,14 @@ class MainWindow(QMainWindow):
         )
         self._add_spin(form, "fpi", "FPI", self.default_dims.fpi, 1, 60, decimals=0)
         self._add_spin(form, "tube_dia_inch", "Tube Dia (inch)", self.default_dims.tube_dia_inch, 0.1, 2.0, decimals=3)
-        self._add_spin(form, "header_dia", "Header Dia", self.default_dims.header_dia, 20.0, 500.0)
+        self._add_spin(
+            form,
+            "header_dia",
+            "Header Dia",
+            self.default_dims.header_dia,
+            2.0,
+            500.0,
+        )
         return group
 
     def _build_front_group(self) -> QGroupBox:
@@ -1948,10 +2017,33 @@ class MainWindow(QMainWindow):
         self._direct_spin_boxes[key] = spin
         form.addRow(label, spin)
 
+    def _add_text_input(self, form: QFormLayout, key: str, label: str, default_value: str) -> None:
+        text_input = QLineEdit()
+        text_input.setText(str(default_value))
+        text_input.textChanged.connect(self._apply_changes)
+        self._text_inputs[key] = text_input
+        form.addRow(label, text_input)
+
     def _collect_dimensions(self) -> CoilDimensions:
         connection_side = self.default_dims.connection_side
         if self._connection_side_combo is not None:
             connection_side = self._connection_side_combo.currentText()
+
+        job_order_no = self.default_dims.job_order_no
+        coil_unique_id = self.default_dims.coil_unique_id
+        coil_type = self.default_dims.coil_type
+
+        job_order_input = self._text_inputs.get("job_order_no")
+        if job_order_input is not None:
+            job_order_no = job_order_input.text()
+
+        coil_unique_input = self._text_inputs.get("coil_unique_id")
+        if coil_unique_input is not None:
+            coil_unique_id = coil_unique_input.text()
+
+        coil_type_input = self._text_inputs.get("coil_type")
+        if coil_type_input is not None:
+            coil_type = coil_type_input.text()
 
         top_plate_value = self._spin_boxes["top_plate"].value()
         bottom_plate_value = self._spin_boxes["bottom_plate"].value()
@@ -1985,6 +2077,9 @@ class MainWindow(QMainWindow):
             pitch_vertical=vertical_pitch_value,
             pitch_horizontal=self._spin_boxes["top_feature_pitch_horizontal"].value(),
             connection_side=connection_side,
+            job_order_no=job_order_no,
+            coil_unique_id=coil_unique_id,
+            coil_type=coil_type,
             circle_diameter=self._spin_boxes["circle_diameter"].value(),
             tubes_per_row=tubes_per_row_value,
             number_of_rows=self._spin_boxes["number_of_rows"].value(),
@@ -2014,6 +2109,7 @@ class MainWindow(QMainWindow):
         dims = self._collect_dimensions().sanitized()
         self._sync_spin_values(dims)
         self._sync_connection_side(dims)
+        self._sync_text_inputs(dims)
         self._sync_direct_spin_values(dims)
         self._fl_label.setText(f"{dims.fin_length:.1f}")
         self._fh_label.setText(f"{dims.fin_height:.1f}")
@@ -2136,10 +2232,29 @@ class MainWindow(QMainWindow):
         finally:
             self._is_syncing_direct_inputs = False
 
+    def _sync_text_inputs(self, dims: CoilDimensions) -> None:
+        values = {
+            "job_order_no": dims.job_order_no,
+            "coil_unique_id": dims.coil_unique_id,
+            "coil_type": dims.coil_type,
+        }
+
+        for key, value in values.items():
+            text_input = self._text_inputs.get(key)
+            if text_input is None:
+                continue
+            next_value = str(value)
+            if text_input.text() == next_value:
+                continue
+            text_input.blockSignals(True)
+            text_input.setText(next_value)
+            text_input.blockSignals(False)
+
     def _reset_defaults(self) -> None:
         default_values = self.default_dims.sanitized()
         self._sync_spin_values(default_values)
         self._sync_connection_side(default_values)
+        self._sync_text_inputs(default_values)
         self._apply_changes()
 
     def _zoom_in(self) -> None:
@@ -2417,7 +2532,7 @@ class MainWindow(QMainWindow):
         number_of_circuits = (
             pick_nearest(defaults.number_of_circuits, 1.0, 100.0, consume=False) or defaults.number_of_circuits
         )
-        header_dia = pick_nearest(defaults.header_dia, 20.0, 500.0, consume=False) or defaults.header_dia
+        header_dia = pick_nearest(defaults.header_dia, 2.0, 500.0, consume=False) or defaults.header_dia
         blank_off_bend = pick_nearest(defaults.blank_off_bend, 0.0, 200.0, consume=False) or defaults.blank_off_bend
 
         reconstructed = CoilDimensions(
