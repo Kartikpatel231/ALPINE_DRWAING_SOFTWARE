@@ -178,7 +178,8 @@ class CoilDimensions:
 
     @property
     def top_lead_span(self) -> float:
-        return self.top_total_length - self.front_total_width + self.left_panel_width
+        # Company rule: top lead span = header extension + stub length.
+        return self.left_pipe_offset + self.left_pipe_length
 
     @property
     def calculated_total_height(self) -> float:
@@ -233,7 +234,6 @@ class CoilDimensions:
             min(value.left_pipe_length, value.top_total_length - value.left_pipe_offset),
         )
 
-        value.header_box_height = max(40.0, min(value.header_box_height, value.core_width))
         value.nozzle_projection = max(15.0, value.nozzle_projection)
         value.right_cap_thickness = max(2.0, min(value.right_cap_thickness, value.core_width / 2.0))
 
@@ -279,6 +279,14 @@ class CoilDimensions:
         ):
             value.first_bend_blank_off = max(0.0, min(value.blank_off_bend, 200.0))
         value.blank_off_bend = value.first_bend_blank_off
+
+        # Company rule-driven values.
+        # Feature Tube Height = Horizontal Pitch x (No. of Rows - 1)
+        # Header Box Height = Horizontal Pitch x No. of Rows
+        row_count = value.number_of_rows
+        horizontal_pitch = max(5.0, value.pitch_horizontal)
+        value.top_feature_tube_height = horizontal_pitch * (row_count - 1.0)
+        value.header_box_height = horizontal_pitch * row_count
 
         # Total height is formula-driven:
         # (TPR × Vertical Pitch) + Top Plate + Bottom Plate
@@ -946,14 +954,13 @@ class CoilDrawingWidget(QWidget):
             tube_top = center_y - (feature_span / 2.0)
             tube_bottom = center_y + (feature_span / 2.0)
 
-        if abs(dims.top_feature_tube_height - CoilDimensions.top_feature_tube_height) > 1e-6:
-            max_tube_height = max(10.0, cap_bottom_y - cap_top_y)
-            requested_tube_height = max(10.0, min(dims.top_feature_tube_height, max_tube_height))
-            center_y = (tube_top + tube_bottom) / 2.0
-            top_limit = cap_top_y
-            bottom_limit = cap_bottom_y - requested_tube_height
-            tube_top = min(max(center_y - (requested_tube_height / 2.0), top_limit), bottom_limit)
-            tube_bottom = tube_top + requested_tube_height
+        max_tube_height = max(10.0, cap_bottom_y - cap_top_y)
+        requested_tube_height = max(10.0, min(dims.top_feature_tube_height, max_tube_height))
+        center_y = (tube_top + tube_bottom) / 2.0
+        top_limit = cap_top_y
+        bottom_limit = cap_bottom_y - requested_tube_height
+        tube_top = min(max(center_y - (requested_tube_height / 2.0), top_limit), bottom_limit)
+        tube_bottom = tube_top + requested_tube_height
 
         tube_step = (tube_bottom - tube_top) / max(1, tube_count - 1)
 
@@ -1063,9 +1070,10 @@ class CoilDrawingWidget(QWidget):
             painter.drawArc(loop_rect_flow, 90 * 16, -180 * 16)
             painter.restore()
 
-        self._draw_dim_h(painter, x0, fin_start, y0, -35.0, f"{fin_start - x0:.0f}")
-        self._draw_dim_h(painter, x0, pipe_start, y0, -67.0, f"{dims.left_pipe_offset:.0f}")
+        # Top-side dimensions (kept in ascending order to avoid overlap).
+        self._draw_dim_h(painter, x0, pipe_start, y0, -35.0, f"{dims.left_pipe_offset:.0f}")
         self._draw_dim_h(painter, pipe_start, pipe_end, y0, -67.0, f"{dims.left_pipe_length:.0f}")
+        self._draw_dim_h(painter, x0, pipe_end, y0, -99.0, f"{dims.top_lead_span:.0f}")
 
         self._draw_dim_h(
             painter,
@@ -1075,20 +1083,20 @@ class CoilDrawingWidget(QWidget):
             48.0,
             f"{dims.nozzle_projection:.0f}",
         )
+        self._draw_dim_h(painter, face_start, fin_start, y0 + top_h, 48.0, f"{dims.left_panel_width:.0f}")
         self._draw_dim_h(painter, fin_start, fin_end, y0 + top_h, 48.0, f"{dims.fin_length:.0f} (FL)")
-        self._draw_dim_h(painter, face_start, face_end, y0 + top_h, 126.0, f"{dims.front_total_width:.0f}")
+        self._draw_dim_h(painter, fin_end, face_end, y0 + top_h, 48.0, f"{dims.right_panel_width:.0f}")
+        self._draw_dim_h(painter, x0, intermediate_start, y0 + top_h, 84.0, f"{intermediate_start - x0:.0f}")
+        self._draw_dim_h(painter, face_start, face_end, y0 + top_h, 120.0, f"{dims.front_total_width:.0f}")
         self._draw_dim_h(
             painter,
             intermediate_start,
             face_end,
             y0 + top_h,
-            123.0,
+            120.0,
             f"{dims.top_intermediate_length:.0f}",
         )
-        self._draw_dim_h(painter, x0, face_end, y0 + top_h, 160.0, f"{dims.top_total_length:.0f}")
-        self._draw_dim_h(painter, x0, intermediate_start, y0 + top_h, 86.0, f"{intermediate_start - x0:.0f}")
-        self._draw_dim_h(painter, face_start, fin_start, y0 + top_h, 48.0, f"{dims.left_panel_width:.0f}")
-        self._draw_dim_h(painter, fin_end, face_end, y0 + top_h, 48.0, f"{dims.right_panel_width:.0f}")
+        self._draw_dim_h(painter, x0, face_end, y0 + top_h, 156.0, f"{dims.top_total_length:.0f}")
 
         self._draw_dim_v(painter, left_gap_top_y, left_gap_bottom_y, fin_start, -48.0, f"{top_h:.0f}")
         self._draw_dim_v(painter, y0, y0 + top_h, face_end, 88.0, f"{top_h:.0f}", text_vertical=True)
@@ -1096,30 +1104,31 @@ class CoilDrawingWidget(QWidget):
             painter,
             y0,
             y0 + dims.right_cap_thickness,
-            face_end,
-            52.0,
+            fin_end,
+            54.0,
             f"{dims.right_cap_thickness:.0f}",
-            arrows_inside=True,
+            arrows_inside=False,
             arrow_size=4.8,
             text_vertical=True,
         )
-        top_offset_1 = max(0.0, tube_ys[0] - cap_top_y)
-        top_offset_2 = max(0.0, cap_bottom_y - tube_ys[-1])
+        # Use black header lines as dimension references (not red dashed tube lines).
+        top_offset_1 = max(0.0, header_y - y0)
+        top_offset_2 = max(0.0, (y0 + top_h) - (header_y + header_h))
         self._draw_dim_v(
             painter,
-            cap_top_y,
-            tube_ys[0],
+            y0,
+            header_y,
             fin_end,
-            -118.0,
+            -102.0,
             f"{top_offset_1:.1f}",
             text_vertical=True,
         )
         self._draw_dim_v(
             painter,
-            tube_ys[-1],
-            cap_bottom_y,
+            header_y + header_h,
+            y0 + top_h,
             fin_end,
-            -118.0,
+            -102.0,
             f"{top_offset_2:.1f}",
             text_vertical=True,
         )
@@ -1237,11 +1246,12 @@ class CoilDrawingWidget(QWidget):
 
         # Step 10 — Dimensioning
         if blank_off_w > 0.001:
-            self._draw_internal_dim_h(
+            self._draw_dim_h(
                 painter,
                 outer_left,
                 blank_right_x,
-                y + min(165.0, total_h * 0.32),
+                outer_top,
+                -45.0,
                 f"{blank_off_w:.0f}",
             )
 
@@ -1508,8 +1518,8 @@ class CoilDrawingWidget(QWidget):
         painter.setPen(QPen(self.DIM_COLOR, self.DIM_LINE_WIDTH))
         painter.setFont(QFont("Arial", 10))
         painter.drawLine(QPointF(x_left, y), QPointF(x_right, y))
-        self._draw_arrow_head(painter, QPointF(x_left, y), (1.0, 0.0), 6.8)
-        self._draw_arrow_head(painter, QPointF(x_right, y), (-1.0, 0.0), 6.8)
+        self._draw_arrow_head(painter, QPointF(x_left, y), (-1.0, 0.0), 6.8)
+        self._draw_arrow_head(painter, QPointF(x_right, y), (1.0, 0.0), 6.8)
         painter.drawText(
             QRectF(x_left, y - 22.0, max(10.0, x_right - x_left), 18.0),
             Qt.AlignmentFlag.AlignCenter,
@@ -1538,8 +1548,8 @@ class CoilDrawingWidget(QWidget):
         painter.drawLine(QPointF(x_right, y_ref), QPointF(x_right, y))
         painter.drawLine(QPointF(x_left, y), QPointF(x_right, y))
 
-        self._draw_arrow_head(painter, QPointF(x_left, y), (1.0, 0.0))
-        self._draw_arrow_head(painter, QPointF(x_right, y), (-1.0, 0.0))
+        self._draw_arrow_head(painter, QPointF(x_left, y), (-1.0, 0.0))
+        self._draw_arrow_head(painter, QPointF(x_right, y), (1.0, 0.0))
 
         text_y = y - 21.0 if offset < 0 else y + 4.0
         painter.drawText(
@@ -1569,28 +1579,31 @@ class CoilDrawingWidget(QWidget):
         painter.setPen(QPen(self.DIM_COLOR, self.DIM_LINE_WIDTH))
         painter.setFont(QFont("Arial", 10))
 
-        painter.drawLine(QPointF(x_ref, y_top), QPointF(x, y_top))
-        painter.drawLine(QPointF(x_ref, y_bottom), QPointF(x, y_bottom))
+        witness_gap = 2.0
+        witness_start_x = x_ref + witness_gap if offset >= 0 else x_ref - witness_gap
+        painter.drawLine(QPointF(witness_start_x, y_top), QPointF(x, y_top))
+        painter.drawLine(QPointF(witness_start_x, y_bottom), QPointF(x, y_bottom))
         painter.drawLine(QPointF(x, y_top), QPointF(x, y_bottom))
 
         span = max(0.1, y_bottom - y_top)
         size = 7.5 if arrow_size is None else arrow_size
-        if arrows_inside and span < (size * 2.2):
+        if span < (size * 2.2):
             size = max(2.8, span * 0.35)
 
-        if arrows_inside:
-            top_direction = (0.0, 1.0)
-            bottom_direction = (0.0, -1.0)
-        else:
-            top_direction = (0.0, -1.0)
-            bottom_direction = (0.0, 1.0)
+        # Requested behavior: keep vertical dimension arrows outward.
+        top_direction = (0.0, -1.0)
+        bottom_direction = (0.0, 1.0)
 
         self._draw_arrow_head(painter, QPointF(x, y_top), top_direction, size)
         self._draw_arrow_head(painter, QPointF(x, y_bottom), bottom_direction, size)
 
         if text_vertical:
             text_x = x + (12.0 if offset >= 0 else -12.0)
-            text_y = (y_top + y_bottom) / 2.0
+            # For short dimensions like 12, place text above to avoid overlap with geometry lines.
+            if span <= 24.0:
+                text_y = y_top - 16.0
+            else:
+                text_y = (y_top + y_bottom) / 2.0
             painter.save()
             painter.translate(text_x, text_y)
             painter.rotate(-90.0 if offset >= 0 else 90.0)
@@ -1871,6 +1884,10 @@ class MainWindow(QMainWindow):
         self._add_spin(form, "left_pipe_length", "Stub Length", self.default_dims.left_pipe_length, 10, 3000)
         self._add_spin(form, "nozzle_projection", "Nozzle Projection", self.default_dims.nozzle_projection, 10, 500)
         self._add_spin(form, "header_box_height", "Header Box Height", self.default_dims.header_box_height, 40, 2000)
+        self._spin_boxes["header_box_height"].setReadOnly(True)
+        self._spin_boxes["header_box_height"].setToolTip(
+            "Calculated: Horizontal Pitch × No. of Rows"
+        )
         self._add_spin(
             form,
             "right_cap_thickness",
@@ -1891,6 +1908,10 @@ class MainWindow(QMainWindow):
             10.0,
             400.0,
             decimals=2,
+        )
+        self._spin_boxes["top_feature_tube_height"].setReadOnly(True)
+        self._spin_boxes["top_feature_tube_height"].setToolTip(
+            "Calculated: Horizontal Pitch × (No. of Rows - 1)"
         )
         self._add_spin(
             form,
@@ -1927,6 +1948,10 @@ class MainWindow(QMainWindow):
             self.default_dims.top_lead_span,
             20.0,
             6000.0,
+        )
+        self._direct_spin_boxes["top_lead_span"].setReadOnly(True)
+        self._direct_spin_boxes["top_lead_span"].setToolTip(
+            "Calculated: Header Extension + Stub Length"
         )
         self._add_direct_spin(
             form,
@@ -2054,7 +2079,11 @@ class MainWindow(QMainWindow):
         bottom_plate_value = self._spin_boxes["bottom_plate"].value()
         tubes_per_row_value = self._spin_boxes["tubes_per_row"].value()
         vertical_pitch_value = self._spin_boxes["top_feature_pitch_vertical"].value()
+        horizontal_pitch_value = self._spin_boxes["top_feature_pitch_horizontal"].value()
+        number_of_rows_value = self._spin_boxes["number_of_rows"].value()
         calculated_total_height = (tubes_per_row_value * vertical_pitch_value) + top_plate_value + bottom_plate_value
+        calculated_feature_tube_height = horizontal_pitch_value * (number_of_rows_value - 1.0)
+        calculated_header_box_height = horizontal_pitch_value * number_of_rows_value
 
         first_bend_blank_off = self._spin_boxes["first_bend_blank_off"].value()
 
@@ -2072,7 +2101,7 @@ class MainWindow(QMainWindow):
             left_pipe_offset=self._spin_boxes["left_pipe_offset"].value(),
             left_pipe_length=self._spin_boxes["left_pipe_length"].value(),
             nozzle_projection=self._spin_boxes["nozzle_projection"].value(),
-            header_box_height=self._spin_boxes["header_box_height"].value(),
+            header_box_height=calculated_header_box_height,
             right_cap_thickness=self._spin_boxes["right_cap_thickness"].value(),
             front_header_band_width=self._spin_boxes["front_header_band_width"].value(),
             top_small_offset_1=self._spin_boxes["top_small_offset_1"].value(),
@@ -2087,15 +2116,15 @@ class MainWindow(QMainWindow):
             coil_type=coil_type,
             circle_diameter=self._spin_boxes["circle_diameter"].value(),
             tubes_per_row=tubes_per_row_value,
-            number_of_rows=self._spin_boxes["number_of_rows"].value(),
+            number_of_rows=number_of_rows_value,
             number_of_circuits=self._spin_boxes["number_of_circuits"].value(),
             header_dia=self._spin_boxes["header_dia"].value(),
             blank_off_bend=first_bend_blank_off,
             top_feature_tube_dia=self._spin_boxes["top_feature_tube_dia"].value(),
-            top_feature_tube_height=self._spin_boxes["top_feature_tube_height"].value(),
+            top_feature_tube_height=calculated_feature_tube_height,
             top_feature_pipe_length=self._spin_boxes["top_feature_pipe_length"].value(),
             top_feature_pitch_vertical=vertical_pitch_value,
-            top_feature_pitch_horizontal=self._spin_boxes["top_feature_pitch_horizontal"].value(),
+            top_feature_pitch_horizontal=horizontal_pitch_value,
             top_feature_circle_1_dia=self._spin_boxes["top_feature_circle_1_dia"].value(),
             top_feature_circle_2_dia=self._spin_boxes["top_feature_circle_2_dia"].value(),
             sheet_metal_thickness=self._spin_boxes["sheet_metal_thickness"].value(),
@@ -2126,11 +2155,9 @@ class MainWindow(QMainWindow):
             return
 
         dims = self._collect_dimensions().sanitized()
-        lead_span = self._direct_spin_boxes["top_lead_span"].value()
         fin_length = self._direct_spin_boxes["fin_length_direct"].value()
         fin_height = self._direct_spin_boxes["fin_height_direct"].value()
 
-        dims.top_total_length = lead_span + dims.front_total_width - dims.left_panel_width
         dims.right_panel_width = dims.front_total_width - dims.left_panel_width - fin_length
         total_plate_span = max(10.0, dims.front_total_height - fin_height)
         previous_total = max(0.001, dims.top_plate + dims.bottom_plate)
