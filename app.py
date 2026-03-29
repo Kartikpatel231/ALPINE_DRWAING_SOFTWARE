@@ -43,7 +43,7 @@ except Exception:
     TextEntityAlignment = None
 
 
-ACCESS_WINDOW_DAYS = 10
+ACCESS_WINDOW_DAYS = 15
 DEFAULT_PASSWORD_SHA256 = hashlib.sha256("coilhelvix".encode("utf-8")).hexdigest()
 
 
@@ -804,12 +804,13 @@ class CoilDrawingWidget(QWidget):
         left_side_x = 50.0
         top_view_y = 40.0
         gap = 300.0
+        view_gap_y = 340.0
 
         front_x = left_side_x + dims.core_width + gap
         left_extension = max(0.0, dims.front_header_band_width - dims.left_panel_width)
         front_face_left = front_x + left_extension
         front_total_draw_w = left_extension + dims.front_total_width
-        front_y = top_view_y + dims.core_width + 265.0
+        front_y = top_view_y + dims.core_width + view_gap_y
         right_side_x = front_x + front_total_draw_w + gap
 
         # Align top-view right edge with front-view outer-right edge
@@ -1087,16 +1088,16 @@ class CoilDrawingWidget(QWidget):
         self._draw_dim_h(painter, fin_start, fin_end, y0 + top_h, 48.0, f"{dims.fin_length:.0f} (FL)")
         self._draw_dim_h(painter, fin_end, face_end, y0 + top_h, 48.0, f"{dims.right_panel_width:.0f}")
         self._draw_dim_h(painter, x0, intermediate_start, y0 + top_h, 84.0, f"{intermediate_start - x0:.0f}")
-        self._draw_dim_h(painter, face_start, face_end, y0 + top_h, 120.0, f"{dims.front_total_width:.0f}")
+        self._draw_dim_h(painter, face_start, face_end, y0 + top_h, 112.0, f"{dims.front_total_width:.0f}")
         self._draw_dim_h(
             painter,
             intermediate_start,
             face_end,
             y0 + top_h,
-            120.0,
+            142.0,
             f"{dims.top_intermediate_length:.0f}",
         )
-        self._draw_dim_h(painter, x0, face_end, y0 + top_h, 156.0, f"{dims.top_total_length:.0f}")
+        self._draw_dim_h(painter, x0, face_end, y0 + top_h, 200.0, f"{dims.top_total_length:.0f}")
 
         self._draw_dim_v(painter, left_gap_top_y, left_gap_bottom_y, fin_start, -48.0, f"{top_h:.0f}")
         self._draw_dim_v(painter, y0, y0 + top_h, face_end, 88.0, f"{top_h:.0f}", text_vertical=True)
@@ -1134,7 +1135,7 @@ class CoilDrawingWidget(QWidget):
         )
 
         painter.setPen(object_pen)
-        self._draw_underlined_label(painter, QRectF(x0, y0 + top_h + 182.0, dims.top_total_length, 30.0), "TOP")
+        self._draw_underlined_label(painter, QRectF(x0, y0 + top_h + 248.0, dims.top_total_length, 30.0), "TOP")
 
     def _draw_front_view(self, painter: QPainter, layout: dict[str, float]) -> None:
         dims = self._dims
