@@ -1267,10 +1267,10 @@ class CoilDrawingWidget(QWidget):
             fin_bottom,
             outer_right,
             50.0,
-            f"{fin_h:.0f} (FH)",
+            f"{fin_h:.0f}",
             text_vertical=True,
         )
-        self._draw_dim_v(painter, outer_top, outer_bottom, outer_right, 90.0, f"{total_h:.0f}", text_vertical=True)
+        self._draw_dim_v(painter, outer_top, outer_bottom, outer_right, 85.0, f"{total_h:.0f}", text_vertical=True)
         self._draw_dim_v(
             painter,
             outer_top,
@@ -1412,7 +1412,7 @@ class CoilDrawingWidget(QWidget):
         if show_vertical_dims:
             inner_y = y + tube_box_top_local
             inner_h = tube_layout_h
-            self._draw_dim_v(painter, inner_y, inner_y + inner_h, x + w, 49.0, f"{inner_h:.0f} (FH)")
+            self._draw_dim_v(painter, inner_y, inner_y + inner_h, x + w, 49.0, f"{inner_h:.0f}")
             self._draw_dim_v(painter, y, y + h, x + w, 89.0, f"{h:.0f}")
             self._draw_dim_v(painter, y, y + dims.top_plate, x + w, 127.0, f"{dims.top_plate:.0f}")
             self._draw_dim_v(
