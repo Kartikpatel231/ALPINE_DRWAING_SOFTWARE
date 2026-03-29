@@ -876,10 +876,20 @@ class CoilDrawingWidget(QWidget):
         pipe_end = pipe_start + dims.left_pipe_length
 
         top_h = dims.core_width
-        header_h = min(dims.header_box_height, top_h)
-        header_y = y0 + ((top_h - header_h) / 2.0)
         cap_top_y = y0 + dims.right_cap_thickness
         cap_bottom_y = y0 + top_h - dims.right_cap_thickness
+
+        header_y_target = y0 + dims.top_small_offset_1
+        header_bottom_target = y0 + top_h - dims.top_small_offset_2
+        header_y = max(cap_top_y, min(header_y_target, cap_bottom_y - 10.0))
+        header_bottom = min(cap_bottom_y, max(header_bottom_target, header_y + 10.0))
+        if header_bottom <= header_y + 10.0:
+            header_h = min(dims.header_box_height, top_h)
+            header_y = y0 + ((top_h - header_h) / 2.0)
+            header_bottom = header_y + header_h
+        else:
+            header_h = header_bottom - header_y
+
         left_gap_top_y = y0
         left_gap_bottom_y = y0 + top_h
 
@@ -936,16 +946,8 @@ class CoilDrawingWidget(QWidget):
             )
 
         tube_count = max(2, int(round(dims.number_of_rows)))
-        tube_top_target = cap_top_y + dims.top_small_offset_1
-        tube_bottom_target = cap_bottom_y - dims.top_small_offset_2
-        if tube_bottom_target <= tube_top_target + 10.0:
-            mid_y = (cap_top_y + cap_bottom_y) / 2.0
-            half_span = max(20.0, (cap_bottom_y - cap_top_y - 12.0) / 2.0)
-            tube_top = mid_y - half_span
-            tube_bottom = mid_y + half_span
-        else:
-            tube_top = tube_top_target
-            tube_bottom = tube_bottom_target
+        tube_top = header_y
+        tube_bottom = header_bottom
 
         feature_step = max(5.0, dims.top_feature_pitch_horizontal)
         feature_span = feature_step * max(1, tube_count - 1)
@@ -955,7 +957,7 @@ class CoilDrawingWidget(QWidget):
             tube_top = center_y - (feature_span / 2.0)
             tube_bottom = center_y + (feature_span / 2.0)
 
-        max_tube_height = max(10.0, cap_bottom_y - cap_top_y)
+        max_tube_height = max(10.0, tube_bottom - tube_top)
         requested_tube_height = max(10.0, min(dims.top_feature_tube_height, max_tube_height))
         center_y = (tube_top + tube_bottom) / 2.0
         top_limit = cap_top_y
