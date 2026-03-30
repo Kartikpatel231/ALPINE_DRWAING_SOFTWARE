@@ -185,6 +185,20 @@ class CoilDimensions:
     def calculated_total_height(self) -> float:
         return (self.tubes_per_row * self.pitch_vertical) + self.top_plate + self.bottom_plate
 
+    @property
+    def calculated_top_intermediate_length(self) -> float:
+        blank_off_w = max(
+            self.left_panel_width,
+            min(self.front_header_band_width, self.left_panel_width + self.fin_length),
+        )
+        intermediate_length = self.front_total_width - self.left_panel_width + blank_off_w
+        return max(100.0, intermediate_length)
+
+    @property
+    def calculated_top_total_length(self) -> float:
+        # Company rule: top total length = header extension + top intermediate length.
+        return max(500.0, self.left_pipe_offset + self.top_intermediate_length)
+
     def sanitized(self) -> "CoilDimensions":
         value = replace(self)
         value.top_total_length = max(500.0, value.top_total_length)
@@ -227,6 +241,8 @@ class CoilDimensions:
         value.top_bottom_margin = (value.top_plate + value.bottom_plate) / 2.0
         min_header = value.left_panel_width + 20.0
         value.front_header_band_width = max(min_header, min(value.front_header_band_width, value.front_total_width - 20.0))
+        value.top_intermediate_length = value.calculated_top_intermediate_length
+        value.top_total_length = max(min_top_total, value.calculated_top_total_length)
 
         value.left_pipe_offset = max(0.0, min(value.left_pipe_offset, value.top_total_length - 10.0))
         value.left_pipe_length = max(
@@ -876,20 +892,10 @@ class CoilDrawingWidget(QWidget):
         pipe_end = pipe_start + dims.left_pipe_length
 
         top_h = dims.core_width
+        header_h = min(dims.header_box_height, top_h)
+        header_y = y0 + ((top_h - header_h) / 2.0)
         cap_top_y = y0 + dims.right_cap_thickness
         cap_bottom_y = y0 + top_h - dims.right_cap_thickness
-
-        header_y_target = y0 + dims.top_small_offset_1
-        header_bottom_target = y0 + top_h - dims.top_small_offset_2
-        header_y = max(cap_top_y, min(header_y_target, cap_bottom_y - 10.0))
-        header_bottom = min(cap_bottom_y, max(header_bottom_target, header_y + 10.0))
-        if header_bottom <= header_y + 10.0:
-            header_h = min(dims.header_box_height, top_h)
-            header_y = y0 + ((top_h - header_h) / 2.0)
-            header_bottom = header_y + header_h
-        else:
-            header_h = header_bottom - header_y
-
         left_gap_top_y = y0
         left_gap_bottom_y = y0 + top_h
 
@@ -908,7 +914,8 @@ class CoilDrawingWidget(QWidget):
         intermediate_bend = max(0.0, min(dims.first_bend_intermediate_plate, top_h * 0.35))
 
         left_stub = max(0.0, header_side_bend)
-        bottom_cover_start = min(face_start, intermediate_start)
+        blank_off_w = max(dims.left_panel_width, min(dims.front_header_band_width, dims.left_panel_width + dims.fin_length))
+        bottom_cover_start = max(x0, fin_start - blank_off_w)
         painter.drawLine(QPointF(face_start, left_gap_top_y), QPointF(fin_start, left_gap_top_y))
         if left_stub > 0.0:
             painter.drawLine(QPointF(face_start, left_gap_top_y), QPointF(face_start, left_gap_top_y + left_stub))
@@ -946,8 +953,16 @@ class CoilDrawingWidget(QWidget):
             )
 
         tube_count = max(2, int(round(dims.number_of_rows)))
-        tube_top = header_y
-        tube_bottom = header_bottom
+        tube_top_target = cap_top_y + dims.top_small_offset_1
+        tube_bottom_target = cap_bottom_y - dims.top_small_offset_2
+        if tube_bottom_target <= tube_top_target + 10.0:
+            mid_y = (cap_top_y + cap_bottom_y) / 2.0
+            half_span = max(20.0, (cap_bottom_y - cap_top_y - 12.0) / 2.0)
+            tube_top = mid_y - half_span
+            tube_bottom = mid_y + half_span
+        else:
+            tube_top = tube_top_target
+            tube_bottom = tube_bottom_target
 
         feature_step = max(5.0, dims.top_feature_pitch_horizontal)
         feature_span = feature_step * max(1, tube_count - 1)
@@ -957,7 +972,7 @@ class CoilDrawingWidget(QWidget):
             tube_top = center_y - (feature_span / 2.0)
             tube_bottom = center_y + (feature_span / 2.0)
 
-        max_tube_height = max(10.0, tube_bottom - tube_top)
+        max_tube_height = max(10.0, cap_bottom_y - cap_top_y)
         requested_tube_height = max(10.0, min(dims.top_feature_tube_height, max_tube_height))
         center_y = (tube_top + tube_bottom) / 2.0
         top_limit = cap_top_y
@@ -1875,6 +1890,10 @@ class MainWindow(QMainWindow):
         form = QFormLayout(group)
 
         self._add_spin(form, "top_total_length", "Top Total Length", self.default_dims.top_total_length, 500, 6000)
+        self._spin_boxes["top_total_length"].setReadOnly(True)
+        self._spin_boxes["top_total_length"].setToolTip(
+            "Calculated: Header Extension + Top Intermediate Length"
+        )
         self._add_spin(
             form,
             "top_intermediate_length",
@@ -1882,6 +1901,10 @@ class MainWindow(QMainWindow):
             self.default_dims.top_intermediate_length,
             100,
             6000,
+        )
+        self._spin_boxes["top_intermediate_length"].setReadOnly(True)
+        self._spin_boxes["top_intermediate_length"].setToolTip(
+            "Calculated from Front Total Width, Header Side Plate, and Blank Off Width"
         )
         self._add_spin(form, "front_total_width", "Front Total Width", self.default_dims.front_total_width, 200, 6000)
         self._add_spin(form, "left_pipe_length", "Stub Length", self.default_dims.left_pipe_length, 10, 3000)
@@ -2087,26 +2110,39 @@ class MainWindow(QMainWindow):
         calculated_total_height = (tubes_per_row_value * vertical_pitch_value) + top_plate_value + bottom_plate_value
         calculated_feature_tube_height = horizontal_pitch_value * (number_of_rows_value - 1.0)
         calculated_header_box_height = horizontal_pitch_value * number_of_rows_value
+        top_total_length_value = self._spin_boxes["top_total_length"].value()
+        left_pipe_offset_value = self._spin_boxes["left_pipe_offset"].value()
+        front_total_width_value = self._spin_boxes["front_total_width"].value()
+        left_panel_width_value = self._spin_boxes["left_panel_width"].value()
+        right_panel_width_value = self._spin_boxes["right_panel_width"].value()
+        front_header_band_width_value = self._spin_boxes["front_header_band_width"].value()
+        fin_length_value = max(20.0, front_total_width_value - left_panel_width_value - right_panel_width_value)
+        blank_off_w_value = max(
+            left_panel_width_value,
+            min(front_header_band_width_value, left_panel_width_value + fin_length_value),
+        )
+        calculated_top_intermediate_length = max(100.0, front_total_width_value - left_panel_width_value + blank_off_w_value)
+        calculated_top_total_length = max(500.0, left_pipe_offset_value + calculated_top_intermediate_length)
 
         first_bend_blank_off = self._spin_boxes["first_bend_blank_off"].value()
 
         return CoilDimensions(
-            top_total_length=self._spin_boxes["top_total_length"].value(),
-            top_intermediate_length=self._spin_boxes["top_intermediate_length"].value(),
-            front_total_width=self._spin_boxes["front_total_width"].value(),
+            top_total_length=max(top_total_length_value, calculated_top_total_length),
+            top_intermediate_length=calculated_top_intermediate_length,
+            front_total_width=front_total_width_value,
             front_total_height=calculated_total_height,
-            left_panel_width=self._spin_boxes["left_panel_width"].value(),
-            right_panel_width=self._spin_boxes["right_panel_width"].value(),
+            left_panel_width=left_panel_width_value,
+            right_panel_width=right_panel_width_value,
             top_bottom_margin=(top_plate_value + bottom_plate_value) / 2.0,
             top_plate=top_plate_value,
             bottom_plate=bottom_plate_value,
             core_width=self._spin_boxes["core_width"].value(),
-            left_pipe_offset=self._spin_boxes["left_pipe_offset"].value(),
+            left_pipe_offset=left_pipe_offset_value,
             left_pipe_length=self._spin_boxes["left_pipe_length"].value(),
             nozzle_projection=self._spin_boxes["nozzle_projection"].value(),
             header_box_height=calculated_header_box_height,
             right_cap_thickness=self._spin_boxes["right_cap_thickness"].value(),
-            front_header_band_width=self._spin_boxes["front_header_band_width"].value(),
+            front_header_band_width=front_header_band_width_value,
             top_small_offset_1=self._spin_boxes["top_small_offset_1"].value(),
             top_small_offset_2=self._spin_boxes["top_small_offset_2"].value(),
             fpi=self._spin_boxes["fpi"].value(),
