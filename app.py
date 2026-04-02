@@ -43,7 +43,7 @@ except Exception:
     TextEntityAlignment = None
 
 
-ACCESS_WINDOW_DAYS = 15
+ACCESS_WINDOW_DAYS = 30
 DEFAULT_PASSWORD_SHA256 = hashlib.sha256("coilhelvix".encode("utf-8")).hexdigest()
 
 
@@ -132,7 +132,7 @@ class CoilDimensions:
     bottom_plate: float = 15.0
     core_width: float = 320.0
     left_pipe_offset: float = 170.0
-    left_pipe_length: float = 180.0
+    left_pipe_length: float = 185.0
     nozzle_projection: float = 75.0
     header_box_height: float = 207.6
     right_cap_thickness: float = 12.0
@@ -1922,8 +1922,6 @@ class MainWindow(QMainWindow):
             2,
             400,
         )
-        self._add_spin(form, "top_small_offset_1", "Top Small Offset 1", self.default_dims.top_small_offset_1, 5, 500)
-        self._add_spin(form, "top_small_offset_2", "Top Small Offset 2", self.default_dims.top_small_offset_2, 5, 500)
         self._add_spin(form, "circle_diameter", "Circle Diameter", self.default_dims.circle_diameter, 2.0, 40.0, decimals=2)
         self._add_spin(form, "blank_off_bend", "Blank Off Bend (Legacy)", self.default_dims.blank_off_bend, 0.0, 200.0)
         self._add_spin(
@@ -2123,6 +2121,15 @@ class MainWindow(QMainWindow):
         )
         calculated_top_intermediate_length = max(100.0, front_total_width_value - left_panel_width_value + blank_off_w_value)
         calculated_top_total_length = max(500.0, left_pipe_offset_value + calculated_top_intermediate_length)
+        current_dims = getattr(self.drawing_widget, "_dims", self.default_dims)
+        top_small_offset_1_spin = self._spin_boxes.get("top_small_offset_1")
+        top_small_offset_2_spin = self._spin_boxes.get("top_small_offset_2")
+        top_small_offset_1_value = (
+            top_small_offset_1_spin.value() if top_small_offset_1_spin is not None else current_dims.top_small_offset_1
+        )
+        top_small_offset_2_value = (
+            top_small_offset_2_spin.value() if top_small_offset_2_spin is not None else current_dims.top_small_offset_2
+        )
 
         first_bend_blank_off = self._spin_boxes["first_bend_blank_off"].value()
 
@@ -2143,8 +2150,8 @@ class MainWindow(QMainWindow):
             header_box_height=calculated_header_box_height,
             right_cap_thickness=self._spin_boxes["right_cap_thickness"].value(),
             front_header_band_width=front_header_band_width_value,
-            top_small_offset_1=self._spin_boxes["top_small_offset_1"].value(),
-            top_small_offset_2=self._spin_boxes["top_small_offset_2"].value(),
+            top_small_offset_1=top_small_offset_1_value,
+            top_small_offset_2=top_small_offset_2_value,
             fpi=self._spin_boxes["fpi"].value(),
             tube_dia_inch=self._spin_boxes["tube_dia_inch"].value(),
             pitch_vertical=vertical_pitch_value,

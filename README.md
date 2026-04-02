@@ -33,7 +33,7 @@ python app.py
 ## Startup Access Protection
 
 - On startup, the app asks for a password before opening the main window.
-- Access expires after 10 days from first run unless a fixed expiry date is provided.
+- Access expires after 30 days from first run unless a fixed expiry date is provided.
 - Expired access message: `Software access expired. Contact administrator.`
 
 ### Configure password (recommended for production)
@@ -48,7 +48,7 @@ python -c "import hashlib; print(hashlib.sha256('your_password_here'.encode('utf
 ### Configure fixed expiry date (optional)
 
 - Set `COIL_HELVIX_EXPIRY_DATE` in format `YYYY-MM-DD`.
-- If not set, expiry is `first_run + 10 days`.
+- If not set, expiry is `first_run + 30 days`.
 
 ### Data storage location
 
