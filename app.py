@@ -127,6 +127,7 @@ class CoilDimensions:
     front_total_height: float = 1430.0
     left_panel_width: float = 35.0
     right_panel_width: float = 65.0
+    fin_length_override: float = 1330.0
     top_bottom_margin: float = 15.0
     top_plate: float = 15.0
     bottom_plate: float = 15.0
@@ -170,7 +171,7 @@ class CoilDimensions:
 
     @property
     def fin_length(self) -> float:
-        return max(20.0, self.front_total_width - self.left_panel_width - self.right_panel_width)
+        return max(20.0, self.fin_length_override)
 
     @property
     def fin_height(self) -> float:
@@ -202,18 +203,21 @@ class CoilDimensions:
     def sanitized(self) -> "CoilDimensions":
         value = replace(self)
         value.top_total_length = max(500.0, value.top_total_length)
-        value.front_total_width = max(300.0, value.front_total_width)
+        value.front_total_width = max(200.0, value.front_total_width)
         value.front_total_height = max(300.0, value.front_total_height)
         value.core_width = max(80.0, value.core_width)
         value.top_intermediate_length = max(100.0, min(value.top_intermediate_length, value.top_total_length))
 
-        panel_limit = max(40.0, value.front_total_width - 60.0)
-        value.left_panel_width = max(5.0, min(value.left_panel_width, panel_limit - 5.0))
+        value.left_panel_width = max(5.0, min(value.left_panel_width, 2000.0))
+        value.right_panel_width = max(5.0, min(value.right_panel_width, 2000.0))
+        value.fin_length_override = max(20.0, min(value.fin_length_override, 6000.0))
+        value.front_total_width = max(
+            200.0,
+            value.left_panel_width + value.fin_length + value.right_panel_width,
+        )
 
         min_top_total = value.front_total_width - value.left_panel_width + 20.0
         value.top_total_length = max(value.top_total_length, min_top_total)
-
-        value.right_panel_width = max(5.0, min(value.right_panel_width, panel_limit - value.left_panel_width))
 
         margin_limit = (value.front_total_height / 2.0) - 10.0
         legacy_margin = max(5.0, min(value.top_bottom_margin, margin_limit))
@@ -1378,14 +1382,15 @@ class CoilDrawingWidget(QWidget):
         magenta_pen.setDashPattern([8.0, 5.0])
         painter.setPen(magenta_pen)
         band_margin_x = 8.0
-        band_offset_y = 7.0
+        top_band_y = dims.top_plate * 0.5
+        bottom_band_y = h - (dims.bottom_plate * 0.5)
         painter.drawLine(
-            QPointF(map_x(band_margin_x), y + band_offset_y),
-            QPointF(map_x(w - band_margin_x), y + band_offset_y),
+            QPointF(map_x(band_margin_x), y + top_band_y),
+            QPointF(map_x(w - band_margin_x), y + top_band_y),
         )
         painter.drawLine(
-            QPointF(map_x(band_margin_x), y + h - band_offset_y),
-            QPointF(map_x(w - band_margin_x), y + h - band_offset_y),
+            QPointF(map_x(band_margin_x), y + bottom_band_y),
+            QPointF(map_x(w - band_margin_x), y + bottom_band_y),
         )
 
         hole_pen = QPen(self.MAGENTA, 1.1)
@@ -1907,6 +1912,10 @@ class MainWindow(QMainWindow):
             "Calculated from Front Total Width, Header Side Plate, and Blank Off Width"
         )
         self._add_spin(form, "front_total_width", "Front Total Width", self.default_dims.front_total_width, 200, 6000)
+        self._spin_boxes["front_total_width"].setReadOnly(True)
+        self._spin_boxes["front_total_width"].setToolTip(
+            "Calculated: Header Side Plate + Fin Length + Return Side Plate"
+        )
         self._add_spin(form, "left_pipe_length", "Stub Length", self.default_dims.left_pipe_length, 10, 3000)
         self._add_spin(form, "nozzle_projection", "Nozzle Projection", self.default_dims.nozzle_projection, 10, 500)
         self._add_spin(form, "header_box_height", "Header Box Height", self.default_dims.header_box_height, 40, 2000)
@@ -2110,11 +2119,16 @@ class MainWindow(QMainWindow):
         calculated_header_box_height = horizontal_pitch_value * number_of_rows_value
         top_total_length_value = self._spin_boxes["top_total_length"].value()
         left_pipe_offset_value = self._spin_boxes["left_pipe_offset"].value()
-        front_total_width_value = self._spin_boxes["front_total_width"].value()
         left_panel_width_value = self._spin_boxes["left_panel_width"].value()
         right_panel_width_value = self._spin_boxes["right_panel_width"].value()
+        fin_length_spin = self._direct_spin_boxes.get("fin_length_direct")
+        if fin_length_spin is not None:
+            fin_length_value = max(20.0, fin_length_spin.value())
+        else:
+            front_total_width_value = self._spin_boxes["front_total_width"].value()
+            fin_length_value = max(20.0, front_total_width_value - left_panel_width_value - right_panel_width_value)
+        front_total_width_value = left_panel_width_value + fin_length_value + right_panel_width_value
         front_header_band_width_value = self._spin_boxes["front_header_band_width"].value()
-        fin_length_value = max(20.0, front_total_width_value - left_panel_width_value - right_panel_width_value)
         blank_off_w_value = max(
             left_panel_width_value,
             min(front_header_band_width_value, left_panel_width_value + fin_length_value),
@@ -2140,6 +2154,7 @@ class MainWindow(QMainWindow):
             front_total_height=calculated_total_height,
             left_panel_width=left_panel_width_value,
             right_panel_width=right_panel_width_value,
+            fin_length_override=fin_length_value,
             top_bottom_margin=(top_plate_value + bottom_plate_value) / 2.0,
             top_plate=top_plate_value,
             bottom_plate=bottom_plate_value,
@@ -2204,7 +2219,8 @@ class MainWindow(QMainWindow):
         fin_length = self._direct_spin_boxes["fin_length_direct"].value()
         fin_height = self._direct_spin_boxes["fin_height_direct"].value()
 
-        dims.right_panel_width = dims.front_total_width - dims.left_panel_width - fin_length
+        dims.fin_length_override = max(20.0, fin_length)
+        dims.front_total_width = dims.left_panel_width + dims.fin_length + dims.right_panel_width
         total_plate_span = max(10.0, dims.front_total_height - fin_height)
         previous_total = max(0.001, dims.top_plate + dims.bottom_plate)
         top_ratio = dims.top_plate / previous_total
@@ -2545,13 +2561,7 @@ class MainWindow(QMainWindow):
         left_panel_width = pick_nearest(defaults.left_panel_width, 5.0, 2000.0) or defaults.left_panel_width
         right_panel_width = pick_nearest(defaults.right_panel_width, 5.0, 2000.0) or defaults.right_panel_width
 
-        front_total_width = pick_nearest(defaults.front_total_width, 300.0, 6000.0)
-        if front_total_width is None:
-            front_total_width = left_panel_width + right_panel_width + fin_length
-        elif fin_length_tag is not None:
-            expected_width = left_panel_width + right_panel_width + fin_length
-            if abs(front_total_width - expected_width) > 5.0:
-                front_total_width = expected_width
+        front_total_width = max(200.0, left_panel_width + right_panel_width + fin_length)
 
         top_total_length = pick_nearest(defaults.top_total_length, 500.0, 6000.0) or defaults.top_total_length
         top_intermediate_length = (
@@ -2620,6 +2630,7 @@ class MainWindow(QMainWindow):
             front_total_height=front_total_height,
             left_panel_width=left_panel_width,
             right_panel_width=right_panel_width,
+            fin_length_override=fin_length,
             top_bottom_margin=top_bottom_margin,
             top_plate=top_plate,
             bottom_plate=bottom_plate,
