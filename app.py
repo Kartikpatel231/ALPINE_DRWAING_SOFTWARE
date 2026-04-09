@@ -997,6 +997,7 @@ class CoilDrawingWidget(QWidget):
         max_tube_height = max(10.0, cap_bottom_y - cap_top_y)
         requested_tube_height = max(10.0, min(dims.top_feature_tube_height, max_tube_height))
         center_y = (tube_top + tube_bottom) / 2.0
+        # comment
         top_limit = cap_top_y
         bottom_limit = cap_bottom_y - requested_tube_height
         tube_top = min(max(center_y - (requested_tube_height / 2.0), top_limit), bottom_limit)
