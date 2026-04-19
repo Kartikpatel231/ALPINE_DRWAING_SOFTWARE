@@ -43,7 +43,7 @@ except Exception:
     TextEntityAlignment = None
 
 
-ACCESS_WINDOW_DAYS = 30
+ACCESS_WINDOW_DAYS = 35
 DEFAULT_PASSWORD_SHA256 = hashlib.sha256("coilhelvix".encode("utf-8")).hexdigest()
 
 
@@ -198,8 +198,7 @@ class CoilDimensions:
     @property
     def calculated_top_total_length(self) -> float:
         # Keep top total independent from assembly offset updates.
-        fixed_header_extension = CoilDimensions.left_pipe_offset
-        return max(500.0, fixed_header_extension + self.top_intermediate_length)
+        return max(500.0, self.left_pipe_offset + self.top_intermediate_length)
 
     def sanitized(self) -> "CoilDimensions":
         value = replace(self)
@@ -270,7 +269,7 @@ class CoilDimensions:
         value.tube_dia_inch = max(0.1, min(value.tube_dia_inch, 2.0))
         value.pitch_vertical = max(5.0, min(value.pitch_vertical, 120.0))
         value.pitch_horizontal = max(5.0, min(value.pitch_horizontal, 120.0))
-        value.circle_diameter = max(2.0, min(value.circle_diameter, 40.0))
+        value.circle_diameter = max(2.0, min(value.circle_diameter, 320.0))
         value.tubes_per_row = max(1.0, min(value.tubes_per_row, 300.0))
         value.number_of_rows = max(1.0, min(value.number_of_rows, 40.0))
         value.number_of_circuits = max(1.0, min(value.number_of_circuits, 100.0))
@@ -1932,7 +1931,7 @@ class MainWindow(QMainWindow):
             2,
             400,
         )
-        self._add_spin(form, "circle_diameter", "Circle Diameter", self.default_dims.circle_diameter, 2.0, 40.0, decimals=2)
+        self._add_spin(form, "circle_diameter", "Circle Diameter", self.default_dims.circle_diameter, 2.0, 320.0, decimals=2)
         self._add_spin(form, "blank_off_bend", "Blank Off Bend (Legacy)", self.default_dims.blank_off_bend, 0.0, 200.0)
         self._add_spin(
             form,
@@ -2135,8 +2134,9 @@ class MainWindow(QMainWindow):
             min(front_header_band_width_value, left_panel_width_value + fin_length_value),
         )
         calculated_top_intermediate_length = max(100.0, front_total_width_value - left_panel_width_value + blank_off_w_value)
-        fixed_header_extension = CoilDimensions.left_pipe_offset
-        calculated_top_total_length = max(500.0, fixed_header_extension + calculated_top_intermediate_length)
+        #fixed_header_extension = CoilDimensions.left_pipe_offset
+        #calculated_top_total_length = max(500.0, fixed_header_extension + calculated_top_intermediate_length)
+        calculated_top_total_length = max(500.0, left_pipe_offset_value + calculated_top_intermediate_length)
         current_dims = getattr(self.drawing_widget, "_dims", self.default_dims)
         top_small_offset_1_spin = self._spin_boxes.get("top_small_offset_1")
         top_small_offset_2_spin = self._spin_boxes.get("top_small_offset_2")
@@ -2616,7 +2616,7 @@ class MainWindow(QMainWindow):
         pitch_vertical = pick_nearest(defaults.pitch_vertical, 5.0, 120.0, consume=False) or defaults.pitch_vertical
         pitch_horizontal = pick_nearest(defaults.pitch_horizontal, 5.0, 120.0, consume=False) or defaults.pitch_horizontal
         connection_side = connection_side_hint or defaults.connection_side
-        circle_diameter = pick_nearest(defaults.circle_diameter, 2.0, 40.0, consume=False) or defaults.circle_diameter
+        circle_diameter = pick_nearest(defaults.circle_diameter, 2.0, 320.0, consume=False) or defaults.circle_diameter
         tubes_per_row = pick_nearest(defaults.tubes_per_row, 1.0, 300.0, consume=False) or defaults.tubes_per_row
         number_of_rows = pick_nearest(defaults.number_of_rows, 1.0, 40.0, consume=False) or defaults.number_of_rows
         number_of_circuits = (
