@@ -1547,6 +1547,26 @@ class CoilDrawingWidget(QWidget):
         inner_hole_pen = QPen(self.OBJECT_COLOR, 1.1)
 
         first_center_x = tube_box_left_local + (horizontal_pitch * 0.5)
+        marker_radius = max(1.2, min(3.5, horizontal_pitch * 0.12))
+        marker_pen = QPen(self.OBJECT_COLOR, 1.6)
+        marker_count = 5
+        marker_start = band_margin_x + marker_radius
+        marker_end = w - band_margin_x - marker_radius
+        if marker_end <= marker_start:
+            marker_positions = [(marker_start + marker_end) * 0.5]
+        elif marker_count == 1:
+            marker_positions = [(marker_start + marker_end) * 0.5]
+        else:
+            marker_step = (marker_end - marker_start) / (marker_count - 1)
+            marker_positions = [marker_start + (index * marker_step) for index in range(marker_count)]
+
+        painter.save()
+        painter.setPen(marker_pen)
+        for marker_x in marker_positions:
+            x_marker = map_x(marker_x)
+            painter.drawEllipse(QPointF(x_marker, y + top_band_y), marker_radius, marker_radius)
+            painter.drawEllipse(QPointF(x_marker, y + bottom_band_y), marker_radius, marker_radius)
+        painter.restore()
         y_start_from_bottom = dims.bottom_plate + (vertical_pitch * 0.5)
         y_bottom_limit = dims.bottom_plate
         y_top_limit = h - dims.top_plate
