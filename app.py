@@ -43,7 +43,7 @@ except Exception:
     TextEntityAlignment = None
 
 
-ACCESS_WINDOW_DAYS = 35
+ACCESS_WINDOW_DAYS = 30
 DEFAULT_PASSWORD_SHA256 = hashlib.sha256("coilhelvix".encode("utf-8")).hexdigest()
 
 
@@ -104,7 +104,7 @@ def _enforce_startup_access() -> tuple[bool, str | None]:
     expiry_utc = _resolve_expiry_datetime(first_run_utc)
     now_utc = datetime.now(timezone.utc)
 
-    if now_utc >= expiry_utc:
+    if now_utc <= expiry_utc:
         return False, "Software access expired. Contact administrator."
 
     password, ok = QInputDialog.getText(
@@ -134,6 +134,7 @@ class CoilDimensions:
     core_width: float = 320.0
     left_pipe_offset: float = 170.0
     left_pipe_length: float = 185.0
+    header_extension_length: float = 260.0 
     nozzle_projection: float = 75.0
     header_box_height: float = 207.6
     right_cap_thickness: float = 12.0
@@ -252,6 +253,7 @@ class CoilDimensions:
         value.left_pipe_length = max(10.0, min(value.left_pipe_length, 3000.0))
 
         value.nozzle_projection = max(15.0, value.nozzle_projection)
+        value.header_extension_length = max(value.nozzle_projection + 5.0, value.header_extension_length)  # <-- ADD THIS
         value.right_cap_thickness = max(2.0, min(value.right_cap_thickness, value.core_width / 2.0))
 
         each_limit = max(5.0, value.core_width - (2.0 * value.right_cap_thickness) - 10.0)
@@ -269,7 +271,7 @@ class CoilDimensions:
         value.tube_dia_inch = max(0.1, min(value.tube_dia_inch, 2.0))
         value.pitch_vertical = max(5.0, min(value.pitch_vertical, 120.0))
         value.pitch_horizontal = max(5.0, min(value.pitch_horizontal, 120.0))
-        value.circle_diameter = max(2.0, min(value.circle_diameter, 320.0))
+        value.circle_diameter = max(2.0, min(value.circle_diameter, 40.0))
         value.tubes_per_row = max(1.0, min(value.tubes_per_row, 300.0))
         value.number_of_rows = max(1.0, min(value.number_of_rows, 40.0))
         value.number_of_circuits = max(1.0, min(value.number_of_circuits, 100.0))
@@ -1005,40 +1007,164 @@ class CoilDrawingWidget(QWidget):
         tube_step = (tube_bottom - tube_top) / max(1, tube_count - 1)
 
         # Nozzle assembly geometry.
-        fixed_circle_to_wall = max(10.0, float(dims.left_pipe_length))
-        fixed_projection = max(15.0, float(dims.nozzle_projection))
-        shared_pipe_dia = max(2.0, float(dims.circle_diameter))
-        fixed_body_h = shared_pipe_dia
-        fixed_neck_h = shared_pipe_dia
-        fixed_flange_radius = shared_pipe_dia / 2.0
-        right_wall_x = face_start
-        circle_x = right_wall_x - fixed_circle_to_wall
-        neck_end_x = circle_x - fixed_flange_radius
-        fixed_neck_len = max(4.0, min(40.0, fixed_circle_to_wall * 0.25))
-        body_end_x = neck_end_x - fixed_neck_len
-        body_start_x = body_end_x - fixed_projection
-        left_to_circle_span = circle_x - body_start_x
-        total_to_wall_span = right_wall_x - body_start_x
+        # fixed_circle_to_wall = max(10.0, float(dims.left_pipe_length))
+        # fixed_projection = max(15.0, float(dims.nozzle_projection))
+        # shared_pipe_dia = max(2.0, float(dims.circle_diameter))
+        # fixed_body_h = shared_pipe_dia
+        # fixed_neck_h = shared_pipe_dia
+        # fixed_flange_radius = shared_pipe_dia / 2.0
+        # right_wall_x = face_start
+        # circle_x = right_wall_x - fixed_circle_to_wall
+        # neck_end_x = circle_x - fixed_flange_radius
+        # fixed_neck_len = max(4.0, min(40.0, fixed_circle_to_wall * 0.25))
+        # body_end_x = neck_end_x - fixed_neck_len
+        # body_start_x = body_end_x - fixed_projection
+        #left_to_circle_span = circle_x - body_start_x
+        #total_to_wall_span = right_wall_x - body_start_x
 
-        for nozzle_y in [tube_top, tube_bottom]:
-            neck_start_x = body_end_x
+        # header_extension_length = total span from x0 to circle centre.
+        # nozzle_projection       = body rect length (x0 → body_end_x).
+        # circle sits at x0 + header_extension_length; body fills x0 → body_end_x.
+        # stub pipe runs from circle-right-tangent → fin_start.
 
-            body_rect = QRectF(body_start_x, nozzle_y - (fixed_body_h / 2.0), max(8.0, body_end_x - body_start_x), fixed_body_h)
-            neck_rect = QRectF(neck_start_x, nozzle_y - (fixed_neck_h / 2.0), max(4.0, neck_end_x - neck_start_x), fixed_neck_h)
+      # ── Nozzle assembly — three fully independent parameters ──────────────
+        # nozzle_projection      : length of the body rectangle  (x0 → body_end_x)
+        # header_extension_length: distance from x0 to circle centre
+        #                          (moves body rect + circle together as one unit)
+        # left_pipe_length       : stub pipe length, drawn rightward from
+        #                          the circle's right tangent — independent of fin_start
+        # ─────────────────────────────────────────────────────────────────────
 
+        available_header_dia = max(10.0, cap_bottom_y - cap_top_y)
+        body_h        = max(10.0, min(dims.header_dia, available_header_dia))
+        neck_h        = max(8.0,  min(body_h - 2.0, body_h * 0.78))
+        thread_len    = min(28.0, max(16.0, dims.nozzle_projection * 0.34))
+        flange_radius = body_h / 2.0
+
+        # Positions derived from the three independent params
+       # ── Fixed right anchor = fin_start (the plate wall) ──────────────────
+        # Stub Length   : fin_start ← leftward by left_pipe_length  → stub_start_x
+        # Circle        : right tangent = stub_start_x, centre = stub_start_x - flange_radius
+        # Nozzle Proj.  : length of body rectangle  (x0 → body_end_x)
+        # Header Ext.   : now derived: distance from x0 to circle centre (read-only/display)
+        # ─────────────────────────────────────────────────────────────────────
+
+        # stub_end_x      = fin_start                                      # FIXED: plate wall
+        # stub_start_x    = fin_start - dims.left_pipe_length              # circle right tangent
+        # flange_center_x = stub_start_x - flange_radius                  # circle centre
+        # body_start_x    = x0                                             # fixed left origin
+        # body_end_x      = x0 + dims.nozzle_projection                   # right edge of body
+        # neck_start_x    = body_end_x
+        # neck_end_x      = max(neck_start_x + 2.0, flange_center_x - flange_radius)
+
+        # # Dimension spans (shown above the view)
+        # ext_len_span  = flange_center_x - body_start_x                  # x0 → circle centre
+        # stub_len_span = dims.left_pipe_length                            # circle tangent → plate
+        # total_span    = stub_end_x - body_start_x                       # x0 → plate
+# ── Right-to-left chain, plate is the fixed anchor ───────────────────
+        # Plate (fin_start) [fixed]
+        #   ← Stub Length        → circle right tangent
+        #   ← flange_radius      → circle centre
+        #   ← flange_radius      → circle left tangent
+        #   ← Header Ext Length  → body right edge  (neck end)
+        #   ← Nozzle Projection  → body left edge
+        # ─────────────────────────────────────────────────────────────────────
+       # half_circle_len = math.pi * flange_radius
+        stub_end_x      = fin_start                                          # FIXED: plate wall
+        stub_start_x    = stub_end_x   - dims.left_pipe_length               # circle right tangent
+        flange_center_x = stub_start_x - flange_radius                       # circle centre
+        circle_left_x   = flange_center_x - flange_radius                    # circle left tangent
+        body_end_x      = circle_left_x - dims.header_extension_length       # right edge of body rect
+        body_start_x    = body_end_x   - dims.nozzle_projection              # left edge of body rect
+        neck_start_x    = body_end_x
+        neck_end_x      = circle_left_x                                      # neck fills gap exactly
+
+        # Dimension spans
+        ext_len_span  = dims.header_extension_length   +    flange_radius                 # circle left tangent → body right
+        stub_len_span = dims.left_pipe_length    +  flange_radius                                 # circle right tangent → plate
+        total_span    = stub_end_x - body_start_x                            # full assembly width
+
+        nozzle_y_positions = [tube_top, tube_bottom]
+        for nozzle_y, name in zip(nozzle_y_positions, ["IN", "OUT"]):
+            # body_rect = QRectF(
+            #     body_start_x,
+            #     nozzle_y - (body_h / 2.0),
+            #     max(8.0, body_end_x - body_start_x),
+            #     body_h,
+            # )
+            body_rect = QRectF(
+                body_start_x,
+                nozzle_y - (body_h / 2.0),
+                max(8.0, dims.nozzle_projection),
+                body_h,
+            )
+            # neck_rect = QRectF(
+            #     neck_start_x,
+            #     nozzle_y - (neck_h / 2.0),
+            #     max(2.0, neck_end_x - neck_start_x),
+            #     neck_h,
+            # )
+            neck_rect = QRectF(
+                neck_start_x,
+                nozzle_y - (neck_h / 2.0),
+                max(2.0, neck_end_x - neck_start_x),
+                neck_h,
+            )
+            # stub_rect = QRectF(
+            #     stub_start_x,
+            #     nozzle_y - (neck_h / 2.0),
+            #     max(2.0, dims.left_pipe_length),
+            #     neck_h,
+            # )
+            # stub_rect = QRectF(
+            #     stub_start_x,
+            #     nozzle_y - (neck_h / 2.0),
+            #     max(2.0, stub_end_x - stub_start_x),
+            #     neck_h,
+            # )
+            # 1. Body rectangle
             painter.drawRect(body_rect)
-            painter.drawRect(neck_rect)
-            painter.drawEllipse(QPointF(circle_x, nozzle_y), fixed_flange_radius, fixed_flange_radius)
-            painter.drawLine(QPointF(circle_x + fixed_flange_radius, nozzle_y), QPointF(right_wall_x, nozzle_y))
+            # 2. Neck between body right edge and circle left tangent
+            if neck_end_x > neck_start_x + 0.5:
+                painter.drawRect(neck_rect)
+            # 3. Circle (flange) — positioned by header_extension_length
+            painter.drawEllipse(QPointF(flange_center_x, nozzle_y), flange_radius, flange_radius)
+            # 4. Stub pipe — independent length, starts at circle right tangent
+            # painter.drawRect(stub_rect)
 
+            # Ribs on body
             rib_start = body_start_x + 4.0
-            rib_end = min(body_start_x + 28.0, body_end_x - 2.0)
+            rib_end   = min(body_start_x + thread_len, body_end_x - 2.0)
             rib_x = rib_start
             while rib_x <= rib_end:
                 painter.drawLine(QPointF(rib_x, body_rect.top()), QPointF(rib_x, body_rect.bottom()))
                 rib_x += 6.0
 
-            painter.drawEllipse(QPointF(body_start_x + (fixed_projection * 0.62), nozzle_y), 2.4, 2.4)
+            # painter.drawEllipse(
+            #     QPointF(body_start_x + (dims.nozzle_projection * 0.62), nozzle_y), 2.4, 2.4
+            # )
+            painter.drawEllipse(
+                QPointF(body_start_x + (dims.nozzle_projection * 0.62), nozzle_y), 2.4, 2.4
+            )
+            # IN / OUT label with arrow
+            arrow_left_x  = body_start_x - 90.0
+            arrow_right_x = body_start_x - 10.0
+            # painter.save()
+            # painter.setPen(QPen(self.DIM_COLOR, self.DIM_LINE_WIDTH))
+            # painter.drawLine(QPointF(arrow_left_x, nozzle_y), QPointF(arrow_right_x, nozzle_y))
+            # self._draw_arrow_head(painter, QPointF(arrow_right_x, nozzle_y), (1.0, 0.0), 7.0)
+            # painter.restore()
+
+            # 4. Stub pipe — single centre line from stub_start_x to plate (fin_start)
+            painter.save()
+            painter.setPen(QPen(self.OBJECT_COLOR, self.OBJECT_LINE_WIDTH))
+            painter.drawLine(QPointF(stub_start_x, nozzle_y), QPointF(stub_end_x, nozzle_y))
+            painter.restore()
+            painter.drawText(
+                QRectF(arrow_left_x - 58.0, nozzle_y - 14.0, 52.0, 28.0),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                name,
+            )
 
         tube_pen = QPen(self.TUBE_COLOR, 1.5)
         tube_pen.setStyle(Qt.PenStyle.DashLine)
@@ -1115,10 +1241,27 @@ class CoilDrawingWidget(QWidget):
         )
         self._draw_dim_h(painter, x0, face_end, y0 + top_h, 200.0, f"{dims.top_total_length:.0f}")
 
-        self._draw_dim_h(painter, body_start_x, body_end_x, y0, -35.0, f"{fixed_projection:.0f}")
-        self._draw_dim_h(painter, body_start_x, circle_x, y0, -67.0, f"{left_to_circle_span:.0f}")
-        self._draw_dim_h(painter, circle_x, right_wall_x, y0, -99.0, f"{fixed_circle_to_wall:.0f}")
-        self._draw_dim_h(painter, body_start_x, right_wall_x, y0, -131.0, f"{total_to_wall_span:.0f}")
+        # self._draw_dim_h(painter, body_start_x, body_end_x, y0, -35.0, f"{fixed_projection:.0f}")
+        # self._draw_dim_h(painter, body_start_x, circle_x, y0, -67.0, f"{left_to_circle_span:.0f}")
+        # self._draw_dim_h(painter, circle_x, right_wall_x, y0, -99.0, f"{fixed_circle_to_wall:.0f}")
+        # self._draw_dim_h(painter, x0, x0 + dims.header_extension_length, y0, -131.0, f"{dims.header_extension_length:.0f}")
+        # self._draw_dim_h(painter, body_start_x, right_wall_x, y0, -131.0, f"{total_to_wall_span:.0f}")
+        # self._draw_dim_h(painter, body_start_x, body_end_x,    y0, -35.0,  f"{dims.nozzle_projection:.0f}")
+        # self._draw_dim_h(painter, body_start_x, flange_center_x, y0, -67.0, f"{ext_len_span:.0f}")
+        # self._draw_dim_h(painter, flange_center_x + flange_radius, stub_end_x, y0, -99.0, f"{stub_len_span:.0f}")
+        # self._draw_dim_h(painter, body_start_x, stub_end_x,    y0, -131.0, f"{total_span:.0f}")
+        # self._draw_dim_h(painter, body_start_x, body_end_x,    y0, -35.0,  f"{dims.nozzle_projection:.0f}")
+        # self._draw_dim_h(painter, body_start_x, flange_center_x, y0, -67.0, f"{ext_len_span:.0f}")
+        # self._draw_dim_h(painter, stub_start_x, stub_end_x,    y0, -99.0,  f"{stub_len_span:.0f}")
+        # self._draw_dim_h(painter, body_start_x, stub_end_x,    y0, -131.0, f"{total_span:.0f}")
+        # self._draw_dim_h(painter, body_start_x, body_end_x,      y0, -35.0,  f"{dims.nozzle_projection:.0f}")
+        # self._draw_dim_h(painter, circle_left_x, body_end_x,     y0, -67.0,  f"{ext_len_span:.0f}  (HEL)")
+      #  self._draw_dim_h(painter, stub_start_x,  stub_end_x,     y0, -99.0,  f"{stub_len_span:.0f}  (SL)")
+        # self._draw_dim_h(painter, body_start_x,  stub_end_x,     y0, -131.0, f"{total_span:.0f}")
+        self._draw_dim_h(painter, body_start_x,    body_end_x,      y0, -35.0,  f"{dims.nozzle_projection:.0f}")
+        self._draw_dim_h(painter, flange_center_x,    stub_end_x, y0, -99.0,  f"{stub_len_span:.0f}")
+        self._draw_dim_h(painter, flange_center_x, body_end_x,      y0, -67.0,  f"{ext_len_span:.0f}")
+        self._draw_dim_h(painter, body_start_x,    stub_end_x,      y0, -131.0, f"{total_span:.0f}")
 
         self._draw_dim_v(painter, left_gap_top_y, left_gap_bottom_y, fin_start, -48.0, f"{top_h:.0f}")
         self._draw_dim_v(painter, y0, y0 + top_h, face_end, 88.0, f"{top_h:.0f}", text_vertical=True)
@@ -1918,6 +2061,7 @@ class MainWindow(QMainWindow):
         )
         self._add_spin(form, "left_pipe_length", "Stub Length", self.default_dims.left_pipe_length, 10, 3000)
         self._add_spin(form, "nozzle_projection", "Nozzle Projection", self.default_dims.nozzle_projection, 10, 500)
+        self._add_spin(form, "header_extension_length", "Header Ext. Length", self.default_dims.header_extension_length, 20, 3000)  # <-- ADD
         self._add_spin(form, "header_box_height", "Header Box Height", self.default_dims.header_box_height, 40, 2000)
         self._spin_boxes["header_box_height"].setReadOnly(True)
         self._spin_boxes["header_box_height"].setToolTip(
@@ -1931,7 +2075,7 @@ class MainWindow(QMainWindow):
             2,
             400,
         )
-        self._add_spin(form, "circle_diameter", "Circle Diameter", self.default_dims.circle_diameter, 2.0, 320.0, decimals=2)
+        self._add_spin(form, "circle_diameter", "Circle Diameter", self.default_dims.circle_diameter, 2.0, 40.0, decimals=2)
         self._add_spin(form, "blank_off_bend", "Blank Off Bend (Legacy)", self.default_dims.blank_off_bend, 0.0, 200.0)
         self._add_spin(
             form,
@@ -2164,6 +2308,7 @@ class MainWindow(QMainWindow):
             left_pipe_offset=left_pipe_offset_value,
             left_pipe_length=self._spin_boxes["left_pipe_length"].value(),
             nozzle_projection=self._spin_boxes["nozzle_projection"].value(),
+            header_extension_length=self._spin_boxes["header_extension_length"].value(),  # <-- ADD
             header_box_height=calculated_header_box_height,
             right_cap_thickness=self._spin_boxes["right_cap_thickness"].value(),
             front_header_band_width=front_header_band_width_value,
@@ -2249,6 +2394,7 @@ class MainWindow(QMainWindow):
             "left_pipe_offset": dims.left_pipe_offset,
             "left_pipe_length": dims.left_pipe_length,
             "nozzle_projection": dims.nozzle_projection,
+            "header_extension_length": dims.header_extension_length,
             "header_box_height": dims.header_box_height,
             "right_cap_thickness": dims.right_cap_thickness,
             "front_header_band_width": dims.front_header_band_width,
@@ -2616,7 +2762,7 @@ class MainWindow(QMainWindow):
         pitch_vertical = pick_nearest(defaults.pitch_vertical, 5.0, 120.0, consume=False) or defaults.pitch_vertical
         pitch_horizontal = pick_nearest(defaults.pitch_horizontal, 5.0, 120.0, consume=False) or defaults.pitch_horizontal
         connection_side = connection_side_hint or defaults.connection_side
-        circle_diameter = pick_nearest(defaults.circle_diameter, 2.0, 320.0, consume=False) or defaults.circle_diameter
+        circle_diameter = pick_nearest(defaults.circle_diameter, 2.0, 40.0, consume=False) or defaults.circle_diameter
         tubes_per_row = pick_nearest(defaults.tubes_per_row, 1.0, 300.0, consume=False) or defaults.tubes_per_row
         number_of_rows = pick_nearest(defaults.number_of_rows, 1.0, 40.0, consume=False) or defaults.number_of_rows
         number_of_circuits = (
