@@ -167,6 +167,33 @@ class CoilDimensions:
         """Formula: (total_width - 40) / 4"""
         return (self.return_plate_total_width - 40.0) / 4.0
 
+    # ── Header Plate computed dimensions ────────────────────────────────────
+    @property
+    def header_plate_total_width(self) -> float:
+        """Formula: Coil Width + 2*((Header Side Plate + First Bend Header) - (4 * sheet thickness))
+           Example: 280 + 2*((35+12)-(4*1.5)) = 362 mm
+        """
+        return self.core_width + 2.0 * (
+            (self.left_panel_width + self.first_bend_header_side) - (4.0 * self.sheet_metal_thickness)
+        )
+
+    @property
+    def header_plate_lifting_hole_side_dist(self) -> float:
+        """Formula: (Header Side Plate / 2) + (first_bend_header - 2 * sheet_thickness)
+           Example: 35/2 + (12 - 2*1.5) = 26.5 mm
+        """
+        return (self.left_panel_width / 2.0) + (self.first_bend_header_side - 2.0 * self.sheet_metal_thickness)
+
+    @property
+    def header_plate_small_hole_pitch(self) -> float:
+        """Formula: (total_width - 40) / 4"""
+        return (self.header_plate_total_width - 40.0) / 4.0
+
+    @property
+    def header_plate_blank_off_hole_count(self) -> int:
+        """Formula: round(Total Height / 150)"""
+        return max(1, round(self.front_total_height / 150.0))
+
     def sanitized(self) -> "CoilDimensions":
         v = replace(self)
         v.top_total_length = max(500.0, v.top_total_length)
@@ -389,6 +416,7 @@ class SideViewDrawingWidget(QWidget):
         gap = 200.0
         margin_left = 100.0
         margin_top = 80.0
+        top_proj_gap = 280.0   # vertical gap between side views and top projection
 
         # Inner core height (formula driven)
         h_inner = dims.tubes_per_row * dims.pitch_vertical + dims.top_plate + dims.bottom_plate
@@ -397,21 +425,46 @@ class SideViewDrawingWidget(QWidget):
         w_return_outer = dims.return_plate_total_width
         w_core = dims.core_width
 
-        return_end_x = margin_left
+        return_end_x  = margin_left
         header_side_x = margin_left + w_return_outer + gap
 
-        world_w = margin_left + w_return_outer + gap + w_core + 220.0
-        world_h = margin_top + h_inner + 340.0
+        # Top projection sits below the two side views.
+        # It is drawn starting from margin_left and spans:
+        #   fin_length (main box) + flanges + stub/header on left + blank-off on right
+        # We give it enough left margin for the header assembly sticking out left.
+        header_assembly_extra = dims.nozzle_projection + dims.header_extension_length + dims.left_pipe_length + dims.header_dia + 120.0
+        top_proj_x = margin_left + header_assembly_extra
+        top_proj_y = margin_top + h_inner + top_proj_gap
+
+        # top-projection height = horizontal_pitch * number_of_rows  (depth of coil)
+        tp_h = max(5.0, dims.pitch_horizontal) * max(1, int(round(dims.number_of_rows)))
+
+        # total world width: must fit side views, top projection AND header plate
+        side_views_w     = margin_left + w_return_outer + gap + w_core + 220.0
+        top_proj_total_w = top_proj_x + dims.fin_length_override + dims.right_panel_width + dims.left_panel_width + 160.0
+        hp_right_edge    = (top_proj_x + dims.fin_length_override + dims.right_panel_width + 200.0
+                            + dims.header_plate_total_width + 220.0)
+        world_w = max(side_views_w, top_proj_total_w, hp_right_edge)
+
+        world_h = top_proj_y + tp_h + 340.0
 
         return {
-            "return_end_x": return_end_x,
-            "header_side_x": header_side_x,
-            "y": margin_top,
-            "h_inner": h_inner,
+            "return_end_x":   return_end_x,
+            "header_side_x":  header_side_x,
+            "y":              margin_top,
+            "h_inner":        h_inner,
             "w_return_outer": w_return_outer,
-            "w_core": w_core,
-            "world_w": world_w,
-            "world_h": world_h,
+            "w_core":         w_core,
+            "top_proj_x":     top_proj_x,
+            "top_proj_y":     top_proj_y,
+            "tp_h":           tp_h,
+            # Header Plate view — placed to the right of the top projection
+            "hp_x":           top_proj_x + dims.fin_length_override + dims.right_panel_width + 200.0,
+            "hp_y":           top_proj_y,
+            "hp_h":           h_inner,
+            "hp_w":           dims.header_plate_total_width,
+            "world_w":        world_w,
+            "world_h":        world_h,
         }
 
     # ── Scene ─────────────────────────────────────────────────────────────────
@@ -424,6 +477,10 @@ class SideViewDrawingWidget(QWidget):
         self._draw_one_side(painter, layout["header_side_x"], layout["y"],
                             layout["w_core"], layout["h_inner"],
                             label="HEADER SIDE", show_vertical_dims=True, mirror=True)
+        # Top projection (coil depth view) — below both side views
+        self._draw_top_projection(painter, layout)
+        # Header Plate — beside the top projection
+        self._draw_header_plate(painter, layout)
         self._draw_notes(painter, layout)
 
     # ── Return End Side (complete per Excel spec) ────────────────────────────
@@ -751,10 +808,471 @@ class SideViewDrawingWidget(QWidget):
         painter.setFont(QFont("Arial", 13))
         painter.drawText(QRectF(x, y + h + 79.0, w, 30.0), Qt.AlignmentFlag.AlignCenter, label)
 
+    # ── Header Plate (Excel spec steps 1-6) ──────────────────────────────────
+
+    def _draw_header_plate(self, painter: QPainter, layout: dict) -> None:
+        """
+        Header Plate drawing per Excel spec:
+
+        Step 1 : Same as End Plate steps 1-8 (tube holes grid) + steps 10-13
+                 (top/bottom band small holes ø6).  Steps 14 & 15 NOT required.
+        Step 2 : Wider outer box:
+                 width = Coil Width + 2*((Header Side Plate + FB_Header) - (4*t))
+                 Example: 280 + 2*((35+12)-(4*1.5)) = 362 mm
+        Step 3 : Lifting hole ø20 mm — top dist = 50 mm,
+                 side dist = (Header Side Plate/2) + (FB_Header - 2*t)
+                 Example: 35/2 + (12 - 2*1.5) = 26.5 mm
+        Step 4 : Mirror lifting hole on the other side.
+        Step 5 : Blank-off holes ø6 mm — first hole 25 mm from lifting hole centre,
+                 subsequent holes every 150 mm.
+        Step 6 : No. of blank-off holes = round(Total Height / 150)
+        """
+        dims = self._dims
+        x    = layout["hp_x"]
+        y    = layout["hp_y"]
+        h    = layout["hp_h"]        # (TPR × VP) + Top Plate + Bottom Plate
+        w    = layout["hp_w"]        # header_plate_total_width
+
+        # ── Geometry helpers ─────────────────────────────────────────────────
+        rows_in_width    = max(1, int(round(dims.number_of_rows)))
+        tubes_per_row    = max(1, int(round(dims.tubes_per_row)))
+        horizontal_pitch = max(5.0, dims.pitch_horizontal)
+        vertical_pitch   = max(5.0, dims.pitch_vertical)
+        tube_layout_w    = rows_in_width * horizontal_pitch
+        tube_layout_h    = max(0.0, tubes_per_row * vertical_pitch)
+
+        obj_pen       = QPen(self.OBJECT_COLOR, self.OBJECT_LINE_WIDTH)
+        inner_rect_pen = QPen(QColor("#222222"), 1.8)
+
+        # ── Step 2: Main outer box (wider than core_width) ───────────────────
+        painter.setPen(obj_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(QRectF(x, y, w, h))
+
+        # ── Step 1 / End Plate steps 2-3: Top and bottom plate offset lines ──
+        # The inner core is centred inside the wider box.
+        inner_offset_x = (w - dims.core_width) / 2.0
+        top_offset_y    = y + dims.top_plate
+        bottom_offset_y = y + h - dims.bottom_plate
+        painter.setPen(QPen(self.OBJECT_COLOR, 1.0))
+        painter.drawLine(QPointF(x,     top_offset_y),    QPointF(x + w, top_offset_y))
+        painter.drawLine(QPointF(x,     bottom_offset_y), QPointF(x + w, bottom_offset_y))
+
+        # ── Step 1 / End Plate step 4: Inner tube layout box ─────────────────
+        # Box centred on the outer box, aligned to bottom offset line.
+        tb_left_local = (w - tube_layout_w) / 2.0
+        tb_top        = h - dims.bottom_plate - tube_layout_h
+        painter.setPen(inner_rect_pen)
+        painter.drawRect(QRectF(x + tb_left_local, y + tb_top, tube_layout_w, tube_layout_h))
+
+        # ── Step 1 / End Plate steps 5-8: Double-circle tube holes ──────────
+        dia_limit       = min(horizontal_pitch, vertical_pitch) * 0.90
+        circle_1_dia    = max(2.0, min(dims.side_plate_outer_circle_dia, dia_limit))
+        circle_2_dia    = max(2.0, min(dims.side_plate_inner_circle_dia, dia_limit))
+        circle_1_r      = circle_1_dia / 2.0
+        circle_2_r      = max(1.0, (circle_2_dia / 2.0) - 0.6)
+
+        outer_hole_pen = QPen(self.TUBE_COLOR,   1.1)
+        inner_hole_pen = QPen(self.OBJECT_COLOR, 1.1)
+
+        first_cx      = tb_left_local + horizontal_pitch * 0.5
+        y_start_frbot = dims.bottom_plate + vertical_pitch * 0.5
+        y_bot_lim     = dims.bottom_plate
+        y_top_lim     = h - dims.top_plate
+
+        for row_i in range(rows_in_width):
+            rcx       = first_cx + row_i * horizontal_pitch
+            row_shift = (vertical_pitch * 0.5) if (row_i % 2 == 1) else 0.0
+            xmin = tb_left_local + circle_1_r
+            xmax = tb_left_local + tube_layout_w - circle_1_r
+            if rcx < xmin or rcx > xmax:
+                continue
+            y_r_bot = y_bot_lim + circle_1_r
+            y_r_top = y_top_lim - circle_1_r
+            if y_r_top < y_r_bot:
+                continue
+            for ti in range(tubes_per_row):
+                y_fb = y_start_frbot + row_shift + ti * vertical_pitch
+                if y_fb < y_r_bot or y_fb > y_r_top:
+                    continue
+                centre = QPointF(x + rcx, y + h - y_fb)
+                painter.save()
+                painter.setPen(outer_hole_pen)
+                painter.drawEllipse(centre, circle_1_r, circle_1_r)
+                painter.setPen(inner_hole_pen)
+                painter.drawEllipse(centre, circle_2_r, circle_2_r)
+                painter.restore()
+
+        # ── Step 1 / End Plate step 10-13: Band small holes ø6 (top + bottom) ─
+        # Step 10: hole ø6 at width=20, height=Top Plate/2 from top
+        # Step 11: 4 holes, pitch=(w - 40)/4
+        # Step 12: same at bottom (height = Bottom Plate/2 from bottom)
+        # Step 13: same 4 holes at bottom
+        small_r     = 3.0                                    # ø6 mm
+        top_hole_y  = y + dims.top_plate / 2.0
+        bot_hole_y  = y + h - dims.bottom_plate / 2.0
+        edge_dist   = 20.0                                   # first hole 20 mm from left edge
+        s_pitch     = max(1.0, (w - 40.0) / 4.0)            # (total_width - 40) / 4
+
+        painter.setPen(obj_pen)
+        for hi in range(5):      # edge hole + 4 pitched holes = 5 total
+            hx = x + edge_dist + hi * s_pitch
+            painter.drawEllipse(QPointF(hx, top_hole_y), small_r, small_r)
+            painter.drawEllipse(QPointF(hx, bot_hole_y), small_r, small_r)
+
+        # ── Steps 3-4: Lifting holes ø20 at top=50 mm, side=lifting_side_dist ─
+        lift_r    = 10.0                                     # ø20 mm radius
+        lift_top_y = y + 50.0
+        side_dist = dims.header_plate_lifting_hole_side_dist  # e.g. 26.5 mm
+        lift_lx   = x + side_dist
+        lift_rx   = x + w - side_dist
+
+        painter.save()
+        painter.setPen(QPen(self.OBJECT_COLOR, self.OBJECT_LINE_WIDTH))
+        painter.drawEllipse(QPointF(lift_lx, lift_top_y), lift_r, lift_r)
+        painter.drawEllipse(QPointF(lift_rx, lift_top_y), lift_r, lift_r)
+        painter.restore()
+
+        # ── Steps 5-6: Blank-off holes ø6 ────────────────────────────────────
+        # First hole at 25 mm from lifting hole centre (downward).
+        # All other holes at 150 mm intervals.
+        # Number of holes = round(Total Height / 150).
+        bo_hole_count = dims.header_plate_blank_off_hole_count
+        bo_hole_r     = 3.0                                  # ø6 mm
+        bo_first_y    = lift_top_y + 25.0                    # 25 mm below lifting hole
+        bo_pitch      = 150.0
+
+        painter.save()
+        painter.setPen(QPen(self.OBJECT_COLOR, 1.2))
+        for bi in range(bo_hole_count):
+            bhy = bo_first_y + bi * bo_pitch
+            if bhy > y + h - 5.0:
+                break
+            # Draw on both sides (left column and right column)
+            painter.drawEllipse(QPointF(lift_lx, bhy), bo_hole_r, bo_hole_r)
+            painter.drawEllipse(QPointF(lift_rx, bhy), bo_hole_r, bo_hole_r)
+        painter.restore()
+
+        # ── Magenta dashed band lines + 5 marker dots ────────────────────────
+        mg_pen = QPen(self.MAGENTA, 1.1)
+        mg_pen.setStyle(Qt.PenStyle.DashLine)
+        mg_pen.setDashPattern([8.0, 5.0])
+        painter.setPen(mg_pen)
+        bm            = 8.0
+        top_band_y    = dims.top_plate * 0.5
+        bottom_band_y = h - dims.bottom_plate * 0.5
+        painter.drawLine(QPointF(x + bm,      y + top_band_y),
+                         QPointF(x + w - bm,  y + top_band_y))
+        painter.drawLine(QPointF(x + bm,      y + bottom_band_y),
+                         QPointF(x + w - bm,  y + bottom_band_y))
+
+        marker_r = max(1.2, min(3.5, horizontal_pitch * 0.12))
+        m_start  = inner_offset_x + bm + marker_r
+        m_end    = inner_offset_x + dims.core_width - bm - marker_r
+        if m_end > m_start:
+            m_step = (m_end - m_start) / 4.0
+            mpos   = [m_start + i * m_step for i in range(5)]
+        else:
+            mpos   = [(m_start + m_end) / 2.0]
+        painter.save()
+        painter.setPen(QPen(self.OBJECT_COLOR, 1.6))
+        for mp in mpos:
+            painter.drawEllipse(QPointF(x + mp, y + top_band_y),    marker_r, marker_r)
+            painter.drawEllipse(QPointF(x + mp, y + bottom_band_y), marker_r, marker_r)
+        painter.restore()
+
+        # ── Dimensions ────────────────────────────────────────────────────────
+        # Overall width
+        self._dim_h(painter, x, x + w, y, -45.0, f"{w:.0f}")
+        # Total height
+        self._dim_v(painter, y, y + h, x + w, 50.0, f"{h:.0f}")
+        # Top plate
+        self._dim_v(painter, y, y + dims.top_plate, x + w, 90.0, f"{dims.top_plate:.0f}")
+        # Bottom plate
+        self._dim_v(painter, y + h - dims.bottom_plate, y + h, x + w, 90.0, f"{dims.bottom_plate:.0f}")
+        # Lifting hole top distance
+        self._dim_v(painter, y, lift_top_y, x, -50.0, "50")
+        # Lifting hole side distance
+        self._dim_h(painter, x, lift_lx, y + h, 45.0, f"{side_dist:.1f}")
+        # Blank-off hole count annotation
+        painter.setPen(QPen(self.DIM_COLOR, self.DIM_LINE_WIDTH))
+        painter.setFont(QFont("Arial", 9))
+        painter.drawText(
+            QRectF(x, y - 38.0, w, 14.0), Qt.AlignmentFlag.AlignCenter,
+            f"Blank-off holes: {bo_hole_count} × ø6 @ 150mm pitch",
+        )
+        # Circle annotation
+        painter.drawText(
+            QRectF(x, y - 22.0, w, 14.0), Qt.AlignmentFlag.AlignCenter,
+            f"C1 Ø {circle_1_dia:.2f}   C2 Ø {circle_2_dia:.2f}",
+        )
+
+        # ── View label (file name hint) ───────────────────────────────────────
+        painter.setPen(obj_pen)
+        self._draw_underlined_label(
+            painter,
+            QRectF(x, y + h + 50.0, w, 30.0),
+            f"HEADER PLATE  ({dims.coil_unique_id}-HP)",
+        )
+
+    # ── Top Projection (coil depth view — Excel steps 1-16) ──────────────────
+
+    def _draw_top_projection(self, painter: QPainter, layout: dict) -> None:
+        """
+        Draws the coil as seen from above (depth cross-section), implementing
+        Excel Top View steps 1-16:
+
+        Step 1 : Main box  — Length = Fin Length,  Width = HP × No. of rows
+        Step 2 : Dashed row lines (HP/2 offset from bottom) + small tube-dia box at right end
+        Step 3 : Repeat for every row (No. of rows total dashed lines)
+        Step 4 : Right-end semi-circle bends  R1=(HP+tube_dia)/2  R2=(HP-tube_dia)/2
+        Step 5 : Repeat for all pairs
+        Step 6 : Left/right side flanges extending by Total Width (core_width) centred
+        Step 7 : Header-side flange lines (left_panel_width)
+        Step 8 : Header-side first-bend lines
+        Step 9 : Return-side flange lines (right_panel_width)
+        Step 10: Return-side first-bend lines
+        Step 11: Blank-off line (horizontal, from header side)
+        Step 12: Blank-off bend (vertical tick)
+        Step 13: Stub lines from 1st/last dashed row to circle centre
+        Step 14: Header circles (diameter = header_dia)
+        Step 15: Header body rectangle (nozzle_projection length)
+        Step 16: Dimension annotations
+        """
+        dims   = self._dims
+        x0     = layout["top_proj_x"]   # left edge of main fin box
+        y0     = layout["top_proj_y"]   # top edge of main fin box
+        hp     = max(5.0, dims.pitch_horizontal)
+        nor    = max(1, int(round(dims.number_of_rows)))
+        fl     = max(20.0, dims.fin_length_override)
+        tube_d = max(2.0, dims.top_feature_tube_dia)
+
+        # ── Step 1: main box ──────────────────────────────────────────────────
+        box_h = hp * nor          # width of coil (depth)
+        box_w = fl                # length of coil (fin length)
+
+        obj_pen  = QPen(self.OBJECT_COLOR, self.OBJECT_LINE_WIDTH)
+        dim_pen  = QPen(self.DIM_COLOR,    self.DIM_LINE_WIDTH)
+        dash_pen = QPen(self.TUBE_COLOR,   1.4)
+        dash_pen.setStyle(Qt.PenStyle.DashLine)
+        dash_pen.setDashPattern([10.0, 6.0])
+
+        painter.setPen(obj_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(QRectF(x0, y0, box_w, box_h))
+
+        # ── Steps 2-3: dashed row lines + small box at right end ──────────────
+        # First line offset from TOP by HP/2, then every HP after that.
+        # "Bottom" in Excel = top in screen coords (y increases downward).
+        # Row line y positions inside box:
+        row_ys: list[float] = []
+        for ri in range(nor):
+            ry = y0 + (hp / 2.0) + ri * hp
+            row_ys.append(ry)
+            painter.setPen(dash_pen)
+            painter.drawLine(QPointF(x0, ry), QPointF(x0 + box_w, ry))
+
+            # small tube-dia box at RIGHT end of each dashed line
+            painter.setPen(obj_pen)
+            box_len = 20.0
+            painter.drawRect(QRectF(x0 + box_w - box_len, ry - tube_d / 2.0, box_len, tube_d))
+
+        # ── Steps 4-5: semi-circle bends at return (right) end ───────────────
+        # Between each pair of adjacent row lines draw 2 semi-circles (right side)
+        r1 = (hp + tube_d) / 2.0
+        r2 = (hp - tube_d) / 2.0
+        bend_x = x0 + box_w          # right face of box
+
+        painter.setPen(obj_pen)
+        for pi in range(nor - 1):
+            ya = row_ys[pi]
+            yb = row_ys[pi + 1]
+            cy = (ya + yb) / 2.0
+            # Semi-circles open to the RIGHT (span = -180° → 0°, i.e. right half)
+            # Qt: 0° = 3-o'clock, angles in 1/16 degree, CCW positive
+            rect1 = QRectF(bend_x - r1, cy - r1, 2 * r1, 2 * r1)
+            rect2 = QRectF(bend_x - r2, cy - r2, 2 * r2, 2 * r2)
+            # Draw right semi-circle: start=-90*16, span=-180*16 (bottom to top going right)
+            painter.drawArc(rect1, -90 * 16, -180 * 16)
+            painter.drawArc(rect2, -90 * 16, -180 * 16)
+
+        # ── Step 6: side extension lines (core_width = total width of coil) ──
+        # Two long lines on each face of the main box, centred on box_h.
+        # Length = right_panel_width (return side) and left_panel_width (header side)
+        # but Step 6 says "length = total width" centred — meaning they extend
+        # left and right by the plate widths.
+        left_plate  = dims.left_panel_width    # header side
+        right_plate = dims.right_panel_width   # return side
+        fb_header   = dims.first_bend_header_side
+        fb_return   = dims.first_bend_return_side
+        blank_off_w = max(left_plate, min(dims.front_header_band_width, left_plate + fl))
+        blank_off_bend_len = max(0.0, dims.first_bend_blank_off)
+
+        # The main box top/bottom lines already drawn by drawRect.
+        # Step 6: extend top line LEFT by left_plate and RIGHT by right_plate.
+        top_y    = y0
+        bottom_y = y0 + box_h
+
+        # Left extensions (header side)
+        hdr_left_x = x0 - left_plate
+        painter.setPen(obj_pen)
+        painter.drawLine(QPointF(hdr_left_x, top_y),    QPointF(x0, top_y))
+        painter.drawLine(QPointF(hdr_left_x, bottom_y), QPointF(x0, bottom_y))
+
+        # Right extensions (return side)
+        ret_right_x = x0 + box_w + right_plate
+        painter.drawLine(QPointF(x0 + box_w, top_y),    QPointF(ret_right_x, top_y))
+        painter.drawLine(QPointF(x0 + box_w, bottom_y), QPointF(ret_right_x, bottom_y))
+
+        # Vertical closing lines at flange ends
+        painter.drawLine(QPointF(hdr_left_x, top_y),    QPointF(hdr_left_x, bottom_y))
+        painter.drawLine(QPointF(ret_right_x, top_y),   QPointF(ret_right_x, bottom_y))
+
+        # ── Steps 7-8: Header side first-bend lines ───────────────────────────
+        # Step 7: 2 lines of length = Header Side Plate (already drawn as flange above)
+        # Step 8: 2 tick lines at ends of header-side flange = First Bend length
+        if fb_header > 0:
+            fb_hdr_x = hdr_left_x - fb_header
+            painter.drawLine(QPointF(fb_hdr_x, top_y),    QPointF(hdr_left_x, top_y))
+            painter.drawLine(QPointF(fb_hdr_x, bottom_y), QPointF(hdr_left_x, bottom_y))
+            # Vertical ticks
+            painter.drawLine(QPointF(fb_hdr_x, top_y),    QPointF(fb_hdr_x, top_y    + fb_header * 0.4))
+            painter.drawLine(QPointF(fb_hdr_x, bottom_y), QPointF(fb_hdr_x, bottom_y - fb_header * 0.4))
+        else:
+            fb_hdr_x = hdr_left_x
+
+        # ── Steps 9-10: Return side first-bend lines ──────────────────────────
+        if fb_return > 0:
+            fb_ret_x = ret_right_x + fb_return
+            painter.drawLine(QPointF(ret_right_x, top_y),    QPointF(fb_ret_x, top_y))
+            painter.drawLine(QPointF(ret_right_x, bottom_y), QPointF(fb_ret_x, bottom_y))
+            painter.drawLine(QPointF(fb_ret_x, top_y),    QPointF(fb_ret_x, top_y    + fb_return * 0.4))
+            painter.drawLine(QPointF(fb_ret_x, bottom_y), QPointF(fb_ret_x, bottom_y - fb_return * 0.4))
+
+        # ── Steps 11-12: Blank-off line + bend tick ───────────────────────────
+        # Step 11: horizontal line from header-side bottom end, length = blank_off_w
+        bo_start_x = hdr_left_x
+        bo_end_x   = bo_start_x + blank_off_w        # extends rightward into fin area
+        painter.drawLine(QPointF(bo_start_x, bottom_y), QPointF(bo_end_x, bottom_y))
+        # Step 12: vertical tick downward = blank_off_bend
+        if blank_off_bend_len > 0:
+            painter.drawLine(QPointF(bo_start_x, bottom_y),
+                             QPointF(bo_start_x, bottom_y + blank_off_bend_len))
+
+        # ── Steps 13-15: Stub + header circles + header body ─────────────────
+        # Step 13: from 1st and last dashed row lines, draw lines leftward
+        #          length = stub_length + header_dia/2  (to reach circle centre)
+        stub_len  = max(10.0, dims.left_pipe_length)
+        hdr_dia   = max(2.0,  dims.header_dia)
+        hdr_r     = hdr_dia / 2.0
+        nozzle_proj = max(15.0, dims.nozzle_projection)
+        hdr_ext   = max(nozzle_proj + 5.0, dims.header_extension_length)
+        neck_h    = max(8.0, min(hdr_dia - 2.0, hdr_dia * 0.78))
+        thread_len = min(28.0, max(16.0, nozzle_proj * 0.34))
+
+        first_row_y = row_ys[0]
+        last_row_y  = row_ys[-1]
+
+        for ry in [first_row_y, last_row_y]:
+            # Step 13: stub line from face_left going leftward
+            stub_end_x   = hdr_left_x               # at the plate wall
+            stub_start_x = stub_end_x - stub_len     # circle right tangent
+            circle_cx    = stub_start_x - hdr_r      # circle centre
+            circle_lx    = circle_cx    - hdr_r      # circle left tangent
+            body_end_x   = circle_lx   - hdr_ext     # right edge of body rect
+            body_start_x = body_end_x  - nozzle_proj # left edge of body rect
+            neck_start_x = body_end_x
+            neck_end_x   = circle_lx
+
+            # Stub centre line
+            painter.setPen(obj_pen)
+            painter.drawLine(QPointF(stub_start_x, ry), QPointF(stub_end_x, ry))
+
+            # Step 14: Header circle
+            painter.drawEllipse(QPointF(circle_cx, ry), hdr_r, hdr_r)
+
+            # Step 15: Header body rect + neck
+            body_rect = QRectF(body_start_x, ry - hdr_dia / 2.0,
+                               max(8.0, nozzle_proj), hdr_dia)
+            painter.drawRect(body_rect)
+
+            if neck_end_x > neck_start_x + 0.5:
+                neck_rect = QRectF(neck_start_x, ry - neck_h / 2.0,
+                                   max(2.0, neck_end_x - neck_start_x), neck_h)
+                painter.drawRect(neck_rect)
+
+            # Thread ribs on body
+            rib_x = body_start_x + 4.0
+            rib_end = min(body_start_x + thread_len, body_end_x - 2.0)
+            while rib_x <= rib_end:
+                painter.drawLine(QPointF(rib_x, body_rect.top()),
+                                 QPointF(rib_x, body_rect.bottom()))
+                rib_x += 6.0
+
+            # Small centre dot on body
+            painter.drawEllipse(QPointF(body_start_x + nozzle_proj * 0.62, ry), 2.4, 2.4)
+
+            # IN / OUT label
+            lbl = "IN" if ry == first_row_y else "OUT"
+            painter.setFont(QFont("Arial", 10))
+            painter.drawText(
+                QRectF(body_start_x - 70.0, ry - 14.0, 60.0, 28.0),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                lbl,
+            )
+
+        # ── Step 16: Dimensions ───────────────────────────────────────────────
+        dim_y_below = bottom_y + 50.0
+        dim_y_below2 = bottom_y + 90.0
+        dim_y_below3 = bottom_y + 130.0
+        dim_y_above  = top_y - 45.0
+
+        # Fin length
+        self._dim_h(painter, x0, x0 + box_w, top_y, -45.0, f"{fl:.0f} (FL)")
+        # Header side plate width
+        self._dim_h(painter, hdr_left_x, x0, bottom_y, 48.0, f"{left_plate:.0f}")
+        # Return side plate width
+        self._dim_h(painter, x0 + box_w, ret_right_x, bottom_y, 48.0, f"{right_plate:.0f}")
+        # Horizontal pitch (depth)
+        self._dim_v(painter, top_y, top_y + hp, x0, -55.0, f"HP {hp:.2f}")
+        # Total depth (box_h)
+        self._dim_v(painter, top_y, bottom_y, ret_right_x, 50.0, f"{box_h:.0f}")
+        # Stub length
+        stub_end_x_dim   = hdr_left_x
+        stub_start_x_dim = stub_end_x_dim - stub_len
+        self._dim_h(painter, stub_start_x_dim, stub_end_x_dim, top_y, -45.0, f"{stub_len:.0f} (SL)")
+        # Header dia
+        circle_cx_dim = stub_start_x_dim - hdr_r
+        self._dim_h(painter, circle_cx_dim - hdr_r, circle_cx_dim + hdr_r, top_y, -45.0, f"Ø{hdr_dia:.1f}")
+        # Nozzle projection
+        body_end_dim   = circle_cx_dim - hdr_r - hdr_ext
+        body_start_dim = body_end_dim - nozzle_proj
+        self._dim_h(painter, body_start_dim, body_end_dim, top_y, -45.0, f"{nozzle_proj:.0f}")
+
+        # View label
+        painter.setPen(obj_pen)
+        self._draw_underlined_label(
+            painter,
+            QRectF(x0 - 150.0, bottom_y + 200.0, box_w + 300.0, 30.0),
+            "TOP (DEPTH VIEW)",
+        )
+
+    def _draw_underlined_label(self, painter, rect, text):
+        painter.save()
+        painter.setPen(QPen(self.OBJECT_COLOR, self.OBJECT_LINE_WIDTH))
+        painter.setFont(QFont("Arial", 13))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+        lw = min(rect.width() * 0.22, 120.0)
+        ly = rect.y() + rect.height() - 3.0
+        cx = rect.x() + rect.width() / 2.0
+        painter.drawLine(QPointF(cx - lw / 2.0, ly), QPointF(cx + lw / 2.0, ly))
+        painter.restore()
+
     def _draw_notes(self, painter: QPainter, layout: dict) -> None:
         dims = self._dims
         nx = layout["return_end_x"]
-        ny = layout["y"] + layout["h_inner"] + 168.0
+        # Place notes below the top projection
+        ny = layout["top_proj_y"] + layout["tp_h"] + 240.0
         painter.save()
         painter.setPen(QPen(self.OBJECT_COLOR, self.OBJECT_LINE_WIDTH))
         painter.setFont(QFont("Arial", 10))
@@ -881,8 +1399,11 @@ class MainWindow(QMainWindow):
         self.drawing_widget = SideViewDrawingWidget(self.default_dims)
         self._fl_label  = QLabel()
         self._fh_label  = QLabel()
-        self._rp_w_label = QLabel()   # Return plate computed width
-        self._rp_s_label = QLabel()   # Return plate lifting hole side dist
+        self._rp_w_label  = QLabel()   # Return plate computed width
+        self._rp_s_label  = QLabel()   # Return plate lifting hole side dist
+        self._hp_w_label  = QLabel()   # Header plate computed width
+        self._hp_s_label  = QLabel()   # Header plate lifting hole side dist
+        self._hp_n_label  = QLabel()   # Header plate blank-off hole count
         self._zoom_label = QLabel("100%")
         self._build_ui()
         self._apply_changes()
@@ -1003,8 +1524,11 @@ class MainWindow(QMainWindow):
         f = QFormLayout(g)
         f.addRow("Fin Length (FL)",         self._fl_label)
         f.addRow("Fin Height (FH)",         self._fh_label)
-        f.addRow("Return Plate Width",      self._rp_w_label)
-        f.addRow("Lifting Hole Side Dist",  self._rp_s_label)
+        f.addRow("Return Plate Width",       self._rp_w_label)
+        f.addRow("Return Lifting Side Dist", self._rp_s_label)
+        f.addRow("Header Plate Width",       self._hp_w_label)
+        f.addRow("Header Lifting Side Dist", self._hp_s_label)
+        f.addRow("Header Blank-off Holes",   self._hp_n_label)
         return g
 
     def _build_direct_group(self):

@@ -162,6 +162,8 @@ class CoilDimensions:
     top_feature_pitch_horizontal: float = 34.64
     top_feature_circle_1_dia: float = 15.88
     top_feature_circle_2_dia: float = 14.5
+    side_plate_outer_circle_dia: float = 15.88
+    side_plate_inner_circle_dia: float = 14.5
     sheet_metal_thickness: float = 1.5
     first_bend_header_side: float = 12.0
     first_bend_return_side: float = 12.0
@@ -285,6 +287,11 @@ class CoilDimensions:
         value.top_feature_pitch_horizontal = max(5.0, min(value.top_feature_pitch_horizontal, 200.0))
         value.top_feature_circle_1_dia = max(2.0, min(value.top_feature_circle_1_dia, 80.0))
         value.top_feature_circle_2_dia = max(2.0, min(value.top_feature_circle_2_dia, 80.0))
+        value.side_plate_outer_circle_dia = max(2.0, min(value.side_plate_outer_circle_dia, 80.0))
+        value.side_plate_inner_circle_dia = max(
+            2.0,
+            min(value.side_plate_inner_circle_dia, value.side_plate_outer_circle_dia - 0.4),
+        )
         value.sheet_metal_thickness = max(0.5, min(value.sheet_metal_thickness, 10.0))
         value.first_bend_header_side = max(0.0, min(value.first_bend_header_side, 200.0))
         value.first_bend_return_side = max(0.0, min(value.first_bend_return_side, 200.0))
@@ -1515,10 +1522,10 @@ class CoilDrawingWidget(QWidget):
 
         # Step 5~8: first center, vertical generation, horizontal generation, stagger
         dia_limit = min(horizontal_pitch, vertical_pitch) * 0.90
-        circle_1_dia = max(2.0, min(dims.top_feature_circle_1_dia, dia_limit))
-        circle_2_dia = max(2.0, min(dims.top_feature_circle_2_dia, dia_limit))
+        circle_1_dia = max(2.0, min(dims.side_plate_outer_circle_dia, dia_limit))
+        circle_2_dia = max(2.0, min(dims.side_plate_inner_circle_dia, dia_limit))
         circle_1_radius = circle_1_dia / 2.0
-        circle_2_radius = circle_2_dia / 2.0
+        circle_2_radius = max(1.0, (circle_2_dia / 2.0) - 0.6)
 
         magenta_pen = QPen(self.MAGENTA, 1.1)
         magenta_pen.setStyle(Qt.PenStyle.DashLine)
@@ -1536,10 +1543,30 @@ class CoilDrawingWidget(QWidget):
             QPointF(map_x(w - band_margin_x), y + bottom_band_y),
         )
 
-        hole_pen = QPen(self.MAGENTA, 1.1)
-        painter.setPen(hole_pen)
+        outer_hole_pen = QPen(self.TUBE_COLOR, 1.1)
+        inner_hole_pen = QPen(self.OBJECT_COLOR, 1.1)
 
         first_center_x = tube_box_left_local + (horizontal_pitch * 0.5)
+        marker_radius = max(1.2, min(3.5, horizontal_pitch * 0.12))
+        marker_pen = QPen(self.OBJECT_COLOR, 1.6)
+        marker_count = 5
+        marker_start = band_margin_x + marker_radius
+        marker_end = w - band_margin_x - marker_radius
+        if marker_end <= marker_start:
+            marker_positions = [(marker_start + marker_end) * 0.5]
+        elif marker_count == 1:
+            marker_positions = [(marker_start + marker_end) * 0.5]
+        else:
+            marker_step = (marker_end - marker_start) / (marker_count - 1)
+            marker_positions = [marker_start + (index * marker_step) for index in range(marker_count)]
+
+        painter.save()
+        painter.setPen(marker_pen)
+        for marker_x in marker_positions:
+            x_marker = map_x(marker_x)
+            painter.drawEllipse(QPointF(x_marker, y + top_band_y), marker_radius, marker_radius)
+            painter.drawEllipse(QPointF(x_marker, y + bottom_band_y), marker_radius, marker_radius)
+        painter.restore()
         y_start_from_bottom = dims.bottom_plate + (vertical_pitch * 0.5)
         y_bottom_limit = dims.bottom_plate
         y_top_limit = h - dims.top_plate
@@ -1548,10 +1575,10 @@ class CoilDrawingWidget(QWidget):
             row_center_x = first_center_x + (row_index * horizontal_pitch)
             if row_index % 2 == 0:
                 row_shift = 0.0
-                hole_radius = circle_1_radius
             else:
                 row_shift = vertical_pitch * 0.5
-                hole_radius = circle_2_radius
+
+            hole_radius = circle_1_radius
 
             x_min_limit = tube_box_left_local + hole_radius
             x_max_limit = tube_box_left_local + tube_layout_w - hole_radius
@@ -1569,7 +1596,13 @@ class CoilDrawingWidget(QWidget):
                     continue
 
                 hole_y_local = h - y_from_bottom
-                painter.drawEllipse(QPointF(map_x(row_center_x), y + hole_y_local), hole_radius, hole_radius)
+                center = QPointF(map_x(row_center_x), y + hole_y_local)
+                painter.save()
+                painter.setPen(outer_hole_pen)
+                painter.drawEllipse(center, circle_1_radius, circle_1_radius)
+                painter.setPen(inner_hole_pen)
+                painter.drawEllipse(center, circle_2_radius, circle_2_radius)
+                painter.restore()
 
         # Dimensions and pitch/diameter annotations
         self._draw_dim_h(painter, x, x + w, y + h, 45.0, f"{w:.0f}")
@@ -1974,6 +2007,24 @@ class MainWindow(QMainWindow):
         )
         self._add_spin(form, "right_panel_width", "Return Side Plate", self.default_dims.right_panel_width, 5, 2000)
         self._add_spin(form, "left_panel_width", "Header Side Plate", self.default_dims.left_panel_width, 5, 2000)
+        self._add_spin(
+            form,
+            "side_plate_outer_circle_dia",
+            "Side Plate Outer Circle",
+            self.default_dims.side_plate_outer_circle_dia,
+            2.0,
+            80.0,
+            decimals=2,
+        )
+        self._add_spin(
+            form,
+            "side_plate_inner_circle_dia",
+            "Side Plate Inner Circle",
+            self.default_dims.side_plate_inner_circle_dia,
+            2.0,
+            80.0,
+            decimals=2,
+        )
         self._add_spin(form, "top_plate", "Top Plate", self.default_dims.top_plate, 5, 1000)
         self._add_spin(form, "bottom_plate", "Bottom Plate", self.default_dims.bottom_plate, 5, 1000)
         self._add_spin(
@@ -2335,6 +2386,8 @@ class MainWindow(QMainWindow):
             top_feature_pitch_horizontal=horizontal_pitch_value,
             top_feature_circle_1_dia=self._spin_boxes["top_feature_circle_1_dia"].value(),
             top_feature_circle_2_dia=self._spin_boxes["top_feature_circle_2_dia"].value(),
+            side_plate_outer_circle_dia=self._spin_boxes["side_plate_outer_circle_dia"].value(),
+            side_plate_inner_circle_dia=self._spin_boxes["side_plate_inner_circle_dia"].value(),
             sheet_metal_thickness=self._spin_boxes["sheet_metal_thickness"].value(),
             first_bend_header_side=self._spin_boxes["first_bend_header_side"].value(),
             first_bend_return_side=self._spin_boxes["first_bend_return_side"].value(),
@@ -2417,6 +2470,8 @@ class MainWindow(QMainWindow):
             "top_feature_pitch_horizontal": dims.top_feature_pitch_horizontal,
             "top_feature_circle_1_dia": dims.top_feature_circle_1_dia,
             "top_feature_circle_2_dia": dims.top_feature_circle_2_dia,
+            "side_plate_outer_circle_dia": dims.side_plate_outer_circle_dia,
+            "side_plate_inner_circle_dia": dims.side_plate_inner_circle_dia,
             "sheet_metal_thickness": dims.sheet_metal_thickness,
             "first_bend_header_side": dims.first_bend_header_side,
             "first_bend_return_side": dims.first_bend_return_side,
