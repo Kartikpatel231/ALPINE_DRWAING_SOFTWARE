@@ -24,13 +24,7 @@ jobs:
           pip install pyinstaller
 
       - name: Build main.py with embedded view files
-        run: |
-          pyinstaller --onefile --name coil_helvix_tabbed ^
-            --add-data "frontview.py;." ^
-            --add-data "sideview.py;." ^
-            --add-data "side_view.py;." ^
-            --add-data "topview.py;." ^
-            main2.py
+        run: pyinstaller --onefile --name coil_helvix_tabbed --add-data "frontview.py;." --add-data "sideview.py;." --add-data "side_view.py;." --add-data "topview.py;." main.py
 
       - name: Upload artifact (EXE)
         uses: actions/upload-artifact@v4
