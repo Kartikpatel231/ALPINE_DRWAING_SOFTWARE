@@ -1,4 +1,4 @@
-name: Build Tabbed Version (main.py)
+name: Build Tabbed Version (main1.py)
 
 on:
   push:
@@ -23,10 +23,10 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build  with embedded view files
-        run: pyinstaller --onefile --name coil_helvix_tabbed --add-data "frontview.py;." --add-data "sideview.py;." --add-data "side_view.py;." --add-data "topview.py;." main1.py
+      - name: Build with PyInstaller
+        run: pyinstaller --onefile --name coil_helvix_tabbed --hidden-import PyQt6.QtPrintSupport --add-data "frontview.py;." --add-data "sideview.py;." --add-data "side_view.py;." --add-data "topview.py;." main1.py
 
-      - name: Upload artifact (EXE)
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: coil-helvix-tabbed-windows
