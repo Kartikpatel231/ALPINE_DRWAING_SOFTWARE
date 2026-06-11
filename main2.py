@@ -1,5 +1,5 @@
 """
-main.py  —  Coil Helvix Launcher (Tabbed Version)
+main.py  —  Coil Helvix Launcher (Tabbed Version with PyInstaller support)
 ==================================================
 Single password check, then opens a unified window with tabs:
     • Front View
@@ -7,8 +7,7 @@ Single password check, then opens a unified window with tabs:
     • Header View
     • Top View
 
-Usage:
-    python main.py
+Works both as normal script and as PyInstaller --onefile executable.
 """
 
 import sys
@@ -33,10 +32,19 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
-# ── Make the script's own directory importable ───────────────────────────────
-_HERE = Path(__file__).resolve().parent
-if str(_HERE) not in sys.path:
-    sys.path.insert(0, str(_HERE))
+# ── Fix for PyInstaller: add _MEIPASS to sys.path if frozen ──────────────────
+if getattr(sys, 'frozen', False):
+    # Running as bundled executable
+    base_path = sys._MEIPASS
+else:
+    # Running as normal script
+    base_path = Path(__file__).resolve().parent
+
+# Ensure the base path is in sys.path so imports find the view modules
+if str(base_path) not in sys.path:
+    sys.path.insert(0, str(base_path))
+
+_HERE = Path(base_path)
 
 # ── Access / password helpers (unchanged) ────────────────────────────────────
 ACCESS_WINDOW_DAYS = 30
@@ -98,10 +106,6 @@ def _is_password_valid(entered: str) -> bool:
 def _enforce_access() -> bool:
     """
     Returns True if access should be granted.
-
-    Logic:
-      - Within trial period (now <= expiry): grant access WITHOUT password.
-      - After trial period (now > expiry):   require password.
     """
     first_run = _load_or_create_first_run()
     expiry = _resolve_expiry(first_run)
@@ -126,16 +130,14 @@ def _enforce_access() -> bool:
     return True
 
 
-# ── Patch sub‑module access checks so they never block or prompt ──────────────
+# ── Patch sub‑module access checks ──────────────────────────────────────────
 def _patch_module_access(mod) -> None:
-    """Replace the sub-module's access guard with a no-op that always allows."""
     def _always_allow():
         return True, None
     if hasattr(mod, "_enforce_startup_access"):
         mod._enforce_startup_access = _always_allow
 
 
-# ── Extract a view's central widget from its MainWindow ──────────────────────
 def _extract_central_widget(module_name: str) -> QWidget:
     """
     Import the module, patch its access guard, create its MainWindow,
@@ -147,24 +149,18 @@ def _extract_central_widget(module_name: str) -> QWidget:
         mod = importlib.import_module(module_name)
         _patch_module_access(mod)
 
-        # Instantiate the view's main window
         main_win = mod.MainWindow()
         central = main_win.centralWidget()
 
         if central is None:
-            # No central widget – fallback: return the main window itself
             central = main_win
 
-        # Reparent the central widget so it can live inside a tab
-        central.setParent(None)          # break old parent relationship
-        main_win.hide()                  # hide the original window
-        # Keep a reference to main_win to avoid garbage collection
-        # (some signals might still be needed by the central widget)
+        central.setParent(None)
+        main_win.hide()
         setattr(central, "_hidden_main_window", main_win)
 
         return central
     except Exception as exc:
-        # Create a simple error widget
         error_widget = QWidget()
         layout = QVBoxLayout(error_widget)
         from PyQt6.QtWidgets import QLabel
@@ -174,46 +170,40 @@ def _extract_central_widget(module_name: str) -> QWidget:
         return error_widget
 
 
-# ── Tabbed main window ───────────────────────────────────────────────────────
 class CoilHelvixTabs(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Coil Helvix — Unified View")
         self.resize(1200, 800)
 
-        # Create tab widget
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
 
-        # Define views (module name, display name)
         self.view_defs = [
-            ("frontview", "Front View"),
-            ("sideview", "Side View"),
-            ("side_view", "Header View"),
-            ("topview", "Top View"),
+            ("blankof", "BlankOffPlate"),
+            ("bottomplate", "Top&BottomPlate"),
+            ("intermidateplate", "IntermidatePlate"),
+            ("returnbendplate", "ReturnPlate"),
+            ("side_view", "HeaderPlate"),
+            ("topbottomview", "TopPlate"),
         ]
 
-        # Build each tab
         for module_name, title in self.view_defs:
             widget = _extract_central_widget(module_name)
             self.tabs.addTab(widget, title)
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
 def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName("Coil Helvix Drawing Suite")
     app.setOrganizationName("Coil Helvix")
     app.setFont(QFont("Segoe UI", 10))
 
-    # Single access check for the whole suite
     if not _enforce_access():
         sys.exit(0)
 
-    # Create and show the tabbed window
     window = CoilHelvixTabs()
     window.show()
-
     sys.exit(app.exec())
 
 
