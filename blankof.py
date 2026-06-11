@@ -16,16 +16,21 @@ from PyQt6.QtWidgets import (
     QGroupBox, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QInputDialog,
     QLineEdit, QPushButton, QScrollArea, QSplitter, QVBoxLayout, QWidget,
 )
-
 try:
     import ezdxf
-except Exception:
+    _EZDXF_OK = True
+except ImportError:
     ezdxf = None
+    _EZDXF_OK = False
 
 try:
     from ezdxf.enums import TextEntityAlignment
 except Exception:
-    TextEntityAlignment = None
+    try:
+        from ezdxf.entities import TextEntityAlignment
+    except Exception:
+        TextEntityAlignment = None
+
 
 
 ACCESS_WINDOW_DAYS = 30
@@ -160,6 +165,20 @@ class CoilDimensions:
         return max(500.0, self.left_pipe_offset + self.top_intermediate_length)
 
     @property
+    def blank_off_plate_total_width(self) -> float:
+        return self.core_width + 2.0 * (
+            (self.left_panel_width + self.first_bend_header_side) - (4.0 * self.sheet_metal_thickness)
+        )
+
+    @property
+    def blank_off_plate_lifting_hole_side_dist(self) -> float:
+        return self.left_panel_width / 2.0
+
+    @property
+    def blank_off_plate_hole_count(self) -> int:
+        return max(1, round(self.front_total_height / 150.0))
+
+    @property
     def header_plate_total_width(self) -> float:
         return self.core_width + 2.0 * (
             (self.left_panel_width + self.first_bend_header_side) - (4.0 * self.sheet_metal_thickness)
@@ -264,7 +283,7 @@ class CoilDimensions:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  DXF Painter Adapter  (ported from top_plate.py)
+#  DXF Painter Adapter
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class DxfPainterAdapter:
@@ -280,8 +299,8 @@ class DxfPainterAdapter:
         self._doc.units     = 4  # mm
         self._msp           = self._doc.modelspace()
 
-        self._ensure_layer("DRAWING",         7)
-        self._ensure_layer("TEXT",            7)
+        self._ensure_layer("DRAWING",           7)
+        self._ensure_layer("TEXT",              7)
         self._ensure_layer(self.METADATA_LAYER, 8)
         self._ensure_linetype("DASHED")
 
@@ -325,8 +344,8 @@ class DxfPainterAdapter:
         self._matrix       = matrix
 
     def setRenderHint(self, *_args, **_kwargs) -> None: return
-    def fillRect(self,    *_args, **_kwargs) -> None: return
-    def setClipPath(self, _path: QPainterPath) -> None: self._clip_enabled = True
+    def fillRect(self,    *_args, **_kwargs) -> None:   return
+    def setClipPath(self, _path) -> None:               self._clip_enabled = True
 
     def setPen(self, pen) -> None:
         if isinstance(pen, QPen):
@@ -334,12 +353,10 @@ class DxfPainterAdapter:
         elif isinstance(pen, QColor):
             self._pen = QPen(pen, self._pen.widthF())
 
-    def pen(self) -> QPen: return self._pen
-
-    def setBrush(self, brush) -> None: self._brush = brush
-    def brush(self):                   return self._brush
-
-    def setFont(self, font: QFont) -> None: self._font = QFont(font)
+    def pen(self) -> QPen:  return self._pen
+    def setBrush(self, b):  self._brush = b
+    def brush(self):        return self._brush
+    def setFont(self, f):   self._font = QFont(f)
 
     def translate(self, dx: float, dy: float) -> None:
         self._matrix = self._matrix_multiply(
@@ -379,7 +396,7 @@ class DxfPainterAdapter:
     def drawEllipse(self, *args) -> None:
         if len(args) == 1 and isinstance(args[0], QRectF):
             rect = args[0]
-            cx = rect.x() + rect.width() / 2.0
+            cx = rect.x() + rect.width()  / 2.0
             cy = rect.y() + rect.height() / 2.0
             rx, ry = rect.width() / 2.0, rect.height() / 2.0
         elif len(args) == 3 and isinstance(args[0], QPointF):
@@ -400,8 +417,7 @@ class DxfPainterAdapter:
         segments  = max(16, int(abs(span_deg) / 7.0))
         points: list[tuple[float, float]] = []
         for i in range(segments + 1):
-            t   = i / segments
-            ang = math.radians(start_deg + span_deg * t)
+            ang = math.radians(start_deg + span_deg * i / segments)
             points.append(self._transform_point(cx + rx * math.cos(ang),
                                                 cy - ry * math.sin(ang)))
         self._add_polyline(points, close=False)
@@ -542,15 +558,13 @@ class DxfPainterAdapter:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Header Plate Drawing Widget
+#  Blank-Off Plate Drawing Widget
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class HeaderPlateDrawingWidget(QWidget):
+class BlankOffPlateDrawingWidget(QWidget):
     BACKGROUND        = QColor("#f2f2f2")
     OBJECT_COLOR      = QColor("#111111")
     DIM_COLOR         = QColor("#ff6a00")
-    TUBE_COLOR        = QColor("#ff1a1a")
-    MAGENTA           = QColor("#b000ff")
     OBJECT_LINE_WIDTH = 1.7
     DIM_LINE_WIDTH    = 1.05
 
@@ -650,7 +664,7 @@ class HeaderPlateDrawingWidget(QWidget):
             target_rect, layout["world_w"], layout["world_h"], apply_view_transform)
         painter.translate(ox, oy)
         painter.scale(scale, scale)
-        self._draw_header_plate(painter, layout)
+        self._draw_blank_off_plate(painter, layout)
         self._draw_notes(painter, layout)
         painter.restore()
 
@@ -670,178 +684,97 @@ class HeaderPlateDrawingWidget(QWidget):
         dims        = self._dims
         margin_left = 120.0
         margin_top  = 80.0
-        h_inner     = dims.tubes_per_row * dims.pitch_vertical + dims.top_plate + dims.bottom_plate
-        w           = dims.header_plate_total_width
+        h = dims.front_total_height
+        w = dims.blank_off_plate_total_width
         return {
-            "hp_x":    margin_left,
-            "hp_y":    margin_top,
-            "hp_h":    h_inner,
-            "hp_w":    w,
+            "bp_x":    margin_left,
+            "bp_y":    margin_top,
+            "bp_h":    h,
+            "bp_w":    w,
             "world_w": margin_left + w + 300.0,
-            "world_h": margin_top  + h_inner + 320.0,
+            "world_h": margin_top  + h + 320.0,
         }
 
-    # ── Header Plate drawing ──────────────────────────────────────────────────
+    # ── Blank-Off Plate drawing ───────────────────────────────────────────────
 
-    def _draw_header_plate(self, painter, layout: dict) -> None:
+    def _draw_blank_off_plate(self, painter, layout: dict) -> None:
         dims = self._dims
-        x, y, h, w = layout["hp_x"], layout["hp_y"], layout["hp_h"], layout["hp_w"]
+        x    = layout["bp_x"]
+        y    = layout["bp_y"]
+        h    = layout["bp_h"]
+        w    = layout["bp_w"]
 
-        rows_in_width    = max(1, int(round(dims.number_of_rows)))
-        tubes_per_row    = max(1, int(round(dims.tubes_per_row)))
-        horizontal_pitch = max(5.0, dims.pitch_horizontal)
-        vertical_pitch   = max(5.0, dims.pitch_vertical)
-        tube_layout_w    = rows_in_width * horizontal_pitch
-        tube_layout_h    = max(0.0, tubes_per_row * vertical_pitch)
-
-        obj_pen        = QPen(self.OBJECT_COLOR, self.OBJECT_LINE_WIDTH)
-        inner_rect_pen = QPen(QColor("#222222"), 1.8)
+        obj_pen = QPen(self.OBJECT_COLOR, self.OBJECT_LINE_WIDTH)
 
         # Main outer box
         painter.setPen(obj_pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(QRectF(x, y, w, h))
 
-        # Top / bottom plate offset lines
-        inner_offset_x  = (w - dims.core_width) / 2.0
-        top_offset_y    = y + dims.top_plate
-        bottom_offset_y = y + h - dims.bottom_plate
-        painter.setPen(QPen(self.OBJECT_COLOR, 1.0))
-        painter.drawLine(QPointF(x,     top_offset_y),    QPointF(x + w, top_offset_y))
-        painter.drawLine(QPointF(x,     bottom_offset_y), QPointF(x + w, bottom_offset_y))
-
-        # Inner tube layout box
-        tb_left_local = (w - tube_layout_w) / 2.0
-        tb_top        = h - dims.bottom_plate - tube_layout_h
-        painter.setPen(inner_rect_pen)
-        painter.drawRect(QRectF(x + tb_left_local, y + tb_top, tube_layout_w, tube_layout_h))
-
-        # Double-circle tube holes
-        dia_limit    = min(horizontal_pitch, vertical_pitch) * 0.90
-        circle_1_dia = max(2.0, min(dims.side_plate_outer_circle_dia, dia_limit))
-        circle_2_dia = max(2.0, min(dims.side_plate_inner_circle_dia, dia_limit))
-        circle_1_r   = circle_1_dia / 2.0
-        circle_2_r   = max(1.0, (circle_2_dia / 2.0) - 0.6)
-
-        outer_hole_pen = QPen(self.TUBE_COLOR,   1.1)
-        inner_hole_pen = QPen(self.OBJECT_COLOR, 1.1)
-
-        first_cx      = tb_left_local + horizontal_pitch * 0.5
-        y_start_frbot = dims.bottom_plate + vertical_pitch * 0.5
-        y_bot_lim     = dims.bottom_plate
-        y_top_lim     = h - dims.top_plate
-
-        for row_i in range(rows_in_width):
-            rcx       = first_cx + row_i * horizontal_pitch
-            row_shift = (vertical_pitch * 0.5) if (row_i % 2 == 1) else 0.0
-            xmin = tb_left_local + circle_1_r
-            xmax = tb_left_local + tube_layout_w - circle_1_r
-            if rcx < xmin or rcx > xmax:
-                continue
-            y_r_bot = y_bot_lim + circle_1_r
-            y_r_top = y_top_lim - circle_1_r
-            if y_r_top < y_r_bot:
-                continue
-            for ti in range(tubes_per_row):
-                y_fb = y_start_frbot + row_shift + ti * vertical_pitch
-                if y_fb < y_r_bot or y_fb > y_r_top:
-                    continue
-                centre = QPointF(x + rcx, y + h - y_fb)
-                painter.save()
-                painter.setPen(outer_hole_pen)
-                painter.drawEllipse(centre, circle_1_r, circle_1_r)
-                painter.setPen(inner_hole_pen)
-                painter.drawEllipse(centre, circle_2_r, circle_2_r)
-                painter.restore()
-
-        # Band small holes ø6
-        small_r    = 3.0
-        top_hole_y = y + dims.top_plate / 2.0
-        bot_hole_y = y + h - dims.bottom_plate / 2.0
-        edge_dist  = 20.0
-        s_pitch    = max(1.0, (w - 40.0) / 4.0)
-        painter.setPen(obj_pen)
-        for hi in range(5):
-            hx = x + edge_dist + hi * s_pitch
-            painter.drawEllipse(QPointF(hx, top_hole_y), small_r, small_r)
-            painter.drawEllipse(QPointF(hx, bot_hole_y), small_r, small_r)
-
         # Lifting holes ø20
         lift_r     = 10.0
         lift_top_y = y + 50.0
-        side_dist  = dims.header_plate_lifting_hole_side_dist
+        side_dist  = dims.blank_off_plate_lifting_hole_side_dist
         lift_lx    = x + side_dist
         lift_rx    = x + w - side_dist
+
         painter.save()
         painter.setPen(QPen(self.OBJECT_COLOR, self.OBJECT_LINE_WIDTH))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawEllipse(QPointF(lift_lx, lift_top_y), lift_r, lift_r)
         painter.drawEllipse(QPointF(lift_rx, lift_top_y), lift_r, lift_r)
         painter.restore()
 
         # Blank-off holes ø6
-        bo_hole_count = dims.header_plate_blank_off_hole_count
-        bo_hole_r     = 3.0
-        bo_first_y    = lift_top_y + 25.0
-        bo_pitch      = 150.0
+        bo_count   = dims.blank_off_plate_hole_count
+        bo_r       = 3.0
+        bo_first_y = lift_top_y + 25.0
+        bo_pitch   = 150.0
+
         painter.save()
         painter.setPen(QPen(self.OBJECT_COLOR, 1.2))
-        for bi in range(bo_hole_count):
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for bi in range(bo_count):
             bhy = bo_first_y + bi * bo_pitch
             if bhy > y + h - 5.0:
                 break
-            painter.drawEllipse(QPointF(lift_lx, bhy), bo_hole_r, bo_hole_r)
-            painter.drawEllipse(QPointF(lift_rx, bhy), bo_hole_r, bo_hole_r)
-        painter.restore()
-
-        # Magenta dashed band lines + marker dots
-        mg_pen = QPen(self.MAGENTA, 1.1)
-        mg_pen.setStyle(Qt.PenStyle.DashLine)
-        mg_pen.setDashPattern([8.0, 5.0])
-        painter.setPen(mg_pen)
-        bm            = 8.0
-        top_band_y    = dims.top_plate * 0.5
-        bottom_band_y = h - dims.bottom_plate * 0.5
-        painter.drawLine(QPointF(x + bm,     y + top_band_y),    QPointF(x + w - bm, y + top_band_y))
-        painter.drawLine(QPointF(x + bm,     y + bottom_band_y), QPointF(x + w - bm, y + bottom_band_y))
-
-        marker_r = max(1.2, min(3.5, horizontal_pitch * 0.12))
-        m_start  = inner_offset_x + bm + marker_r
-        m_end    = inner_offset_x + dims.core_width - bm - marker_r
-        if m_end > m_start:
-            m_step = (m_end - m_start) / 4.0
-            mpos   = [m_start + i * m_step for i in range(5)]
-        else:
-            mpos   = [(m_start + m_end) / 2.0]
-        painter.save()
-        painter.setPen(QPen(self.OBJECT_COLOR, 1.6))
-        for mp in mpos:
-            painter.drawEllipse(QPointF(x + mp, y + top_band_y),    marker_r, marker_r)
-            painter.drawEllipse(QPointF(x + mp, y + bottom_band_y), marker_r, marker_r)
+            painter.drawEllipse(QPointF(lift_lx, bhy), bo_r, bo_r)
+            painter.drawEllipse(QPointF(lift_rx, bhy), bo_r, bo_r)
         painter.restore()
 
         # Dimensions
         self._dim_h(painter, x, x + w, y, -45.0, f"{w:.0f}")
         self._dim_v(painter, y, y + h, x + w, 50.0, f"{h:.0f}")
-        self._dim_v(painter, y, y + dims.top_plate, x + w, 90.0, f"{dims.top_plate:.0f}")
-        self._dim_v(painter, y + h - dims.bottom_plate, y + h, x + w, 90.0, f"{dims.bottom_plate:.0f}")
         self._dim_v(painter, y, lift_top_y, x, -50.0, "50")
         self._dim_h(painter, x, lift_lx, y + h, 45.0, f"{side_dist:.1f}")
+        if bo_count >= 2:
+            self._dim_v(painter, bo_first_y, bo_first_y + bo_pitch, x + w, 90.0, "150")
 
-        painter.setPen(QPen(self.DIM_COLOR, self.DIM_LINE_WIDTH))
+        # Annotations
+        dim_pen = QPen(self.DIM_COLOR, self.DIM_LINE_WIDTH)
+        painter.setPen(dim_pen)
         painter.setFont(QFont("Arial", 9))
-        painter.drawText(QRectF(x, y - 38.0, w, 14.0), Qt.AlignmentFlag.AlignCenter,
-                         f"Blank-off holes: {bo_hole_count} × ø6 @ 150mm pitch")
-        painter.drawText(QRectF(x, y - 22.0, w, 14.0), Qt.AlignmentFlag.AlignCenter,
-                         f"C1 Ø {circle_1_dia:.2f}   C2 Ø {circle_2_dia:.2f}")
+        painter.drawText(
+            QRectF(x, y - 38.0, w, 14.0), Qt.AlignmentFlag.AlignCenter,
+            f"Blank-off holes: {bo_count} × ø6 @ 150mm pitch",
+        )
+        painter.drawText(
+            QRectF(x, y - 22.0, w, 14.0), Qt.AlignmentFlag.AlignCenter,
+            f"Lifting holes: 2 × ø20 | Side dist = Header Side Plate / 2 = {side_dist:.1f} mm",
+        )
 
+        # View label
         painter.setPen(obj_pen)
-        self._draw_underlined_label(painter, QRectF(x, y + h + 50.0, w, 30.0),
-                                    f"HEADER PLATE  ({dims.coil_unique_id}-HP)")
+        self._draw_underlined_label(
+            painter,
+            QRectF(x, y + h + 50.0, w, 30.0),
+            f"BLANK-OFF PLATE  ({dims.coil_unique_id}-BO)",
+        )
 
     def _draw_notes(self, painter, layout: dict) -> None:
         dims = self._dims
-        nx   = layout["hp_x"]
-        ny   = layout["hp_y"] + layout["hp_h"] + 100.0
+        nx   = layout["bp_x"]
+        ny   = layout["bp_y"] + layout["bp_h"] + 100.0
         painter.save()
         painter.setPen(QPen(self.OBJECT_COLOR, self.OBJECT_LINE_WIDTH))
         painter.setFont(QFont("Arial", 10))
@@ -850,10 +783,11 @@ class HeaderPlateDrawingWidget(QWidget):
             f"Coil Unique ID: {dims.coil_unique_id}",
             f"Coil Type: {dims.coil_type}",
             f"Connection: {dims.connection_side}",
+            f"File Name: {dims.coil_unique_id}-BO",
         ]):
             painter.drawText(QRectF(nx, ny + i * 22.0, 460.0, 20.0),
                              Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, line)
-        ty = ny + 4 * 22.0 + 18.0
+        ty = ny + 5 * 22.0 + 18.0
         painter.setFont(QFont("Arial", 11))
         painter.drawText(QRectF(nx, ty, 460.0, 22.0),
                          Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "Notes:-")
@@ -934,11 +868,11 @@ class HeaderPlateDrawingWidget(QWidget):
         painter.drawPolygon(QPolygonF([tip, p1, p2]))
         painter.setBrush(ob)
 
-    # ── Export helpers ────────────────────────────────────────────────────────
+    # ── Export ────────────────────────────────────────────────────────────────
 
     def export_png(self, file_path: str) -> bool:
         dims = self._dims
-        iw   = int(max(1200, dims.header_plate_total_width * 4 + 600))
+        iw   = int(max(1200, dims.blank_off_plate_total_width * 4 + 600))
         ih   = int(max(900,  dims.front_total_height * 3 + 500))
         img  = QImage(iw, ih, QImage.Format.Format_ARGB32)
         img.fill(QColor("white"))
@@ -948,12 +882,12 @@ class HeaderPlateDrawingWidget(QWidget):
         return img.save(file_path)
 
     def export_dxf(self, file_path: str) -> bool:
-        """Export the header-plate drawing to DXF using DxfPainterAdapter."""
+        """Export the blank-off plate drawing to DXF using DxfPainterAdapter."""
         try:
             layout        = self._layout_data()
             canvas_height = layout["world_h"]
             adapter       = DxfPainterAdapter(file_path, canvas_height)
-            self._draw_header_plate(adapter, layout)
+            self._draw_blank_off_plate(adapter, layout)
             self._draw_notes(adapter, layout)
             adapter.write_dimensions_metadata(self._dims)
             adapter.save_to_file()
@@ -970,22 +904,17 @@ class HeaderPlateDrawingWidget(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Coil Helvix - HEADER PLATE")
+        self.setWindowTitle("Coil Helvix - BLANK-OFF PLATE")
         self.resize(1280, 860)
-        self.default_dims               = CoilDimensions()
+        self.default_dims = CoilDimensions()
         self._spin_boxes: dict[str, QDoubleSpinBox] = {}
-        self._direct_spin_boxes: dict[str, QDoubleSpinBox] = {}
         self._text_inputs: dict[str, QLineEdit]     = {}
-        self._connection_side_combo: QComboBox | None = None
-        self._is_syncing_inputs         = False
-        self._is_syncing_direct_inputs  = False
-        self.drawing_widget             = HeaderPlateDrawingWidget(self.default_dims)
-        self._fl_label   = QLabel()
-        self._fh_label   = QLabel()
-        self._hp_w_label = QLabel()
-        self._hp_s_label = QLabel()
-        self._hp_n_label = QLabel()
-        self._zoom_label = QLabel("100%")
+        self._is_syncing_inputs = False
+        self.drawing_widget     = BlankOffPlateDrawingWidget(self.default_dims)
+        self._bo_w_label  = QLabel()
+        self._bo_s_label  = QLabel()
+        self._bo_n_label  = QLabel()
+        self._zoom_label  = QLabel("100%")
         self._build_ui()
         self._apply_changes()
 
@@ -1029,20 +958,18 @@ class MainWindow(QMainWindow):
 
     def _build_main_specs_group(self):
         g = QGroupBox("Main Specs"); f = QFormLayout(g)
-        self._add_spin(f, "tubes_per_row",      "Tubes per Row",   self.default_dims.tubes_per_row, 1, 300, 0)
-        self._add_spin(f, "number_of_rows",     "No. of Rows",     self.default_dims.number_of_rows, 1, 40, 0)
-        self._add_spin(f, "number_of_circuits", "No. of Circuits", self.default_dims.number_of_circuits, 1, 100, 0)
-        self._add_spin(f, "fpi",                "FPI",             self.default_dims.fpi, 1, 60, 0)
-        self._add_spin(f, "tube_dia_inch",      "Tube Dia (inch)", self.default_dims.tube_dia_inch, 0.1, 2.0, 3)
-        self._add_spin(f, "header_dia",         "Header Dia",      self.default_dims.header_dia, 2.0, 500.0)
+        self._add_spin(f, "tubes_per_row",      "Tubes per Row",   self.default_dims.tubes_per_row,      1,   300, 0)
+        self._add_spin(f, "number_of_rows",     "No. of Rows",     self.default_dims.number_of_rows,     1,   40,  0)
+        self._add_spin(f, "number_of_circuits", "No. of Circuits", self.default_dims.number_of_circuits, 1,   100, 0)
+        self._add_spin(f, "fpi",                "FPI",             self.default_dims.fpi,                1,   60,  0)
+        self._add_spin(f, "tube_dia_inch",      "Tube Dia (inch)", self.default_dims.tube_dia_inch,      0.1, 2.0, 3)
+        self._add_spin(f, "header_dia",         "Header Dia",      self.default_dims.header_dia,         2.0, 500.0)
         return g
 
     def _build_pitch_group(self):
-        g = QGroupBox("Pitch & Circles"); f = QFormLayout(g)
+        g = QGroupBox("Pitch"); f = QFormLayout(g)
         self._add_spin(f, "top_feature_pitch_vertical",   "Pitch Vertical",   self.default_dims.top_feature_pitch_vertical,   5.0, 200.0, 2)
         self._add_spin(f, "top_feature_pitch_horizontal", "Pitch Horizontal", self.default_dims.top_feature_pitch_horizontal, 5.0, 200.0, 2)
-        self._add_spin(f, "side_plate_outer_circle_dia",  "Outer Circle Ø",   self.default_dims.side_plate_outer_circle_dia,  2.0, 80.0,  2)
-        self._add_spin(f, "side_plate_inner_circle_dia",  "Inner Circle Ø",   self.default_dims.side_plate_inner_circle_dia,  2.0, 80.0,  2)
         return g
 
     def _build_plate_group(self):
@@ -1064,9 +991,9 @@ class MainWindow(QMainWindow):
 
     def _build_derived_group(self):
         g = QGroupBox("Derived / Computed"); f = QFormLayout(g)
-        f.addRow("Header Plate Width",       self._hp_w_label)
-        f.addRow("Header Lifting Side Dist", self._hp_s_label)
-        f.addRow("Header Blank-off Holes",   self._hp_n_label)
+        f.addRow("Blank-Off Plate Width",  self._bo_w_label)
+        f.addRow("Lifting Hole Side Dist", self._bo_s_label)
+        f.addRow("No. of Blank-off Holes", self._bo_n_label)
         return g
 
     def _build_buttons_row(self):
@@ -1118,7 +1045,6 @@ class MainWindow(QMainWindow):
         self._text_inputs[key] = t; form.addRow(label, t)
 
     def _collect_dimensions(self) -> CoilDimensions:
-        conn  = self._connection_side_combo.currentText() if self._connection_side_combo else self.default_dims.connection_side
         job   = self._text_inputs.get("job_order_no",   QLineEdit()).text() or self.default_dims.job_order_no
         uid   = self._text_inputs.get("coil_unique_id", QLineEdit()).text() or self.default_dims.coil_unique_id
         ctype = self._text_inputs.get("coil_type",      QLineEdit()).text() or self.default_dims.coil_type
@@ -1128,7 +1054,6 @@ class MainWindow(QMainWindow):
         vp    = self._spin_boxes["top_feature_pitch_vertical"].value()
         hp    = self._spin_boxes["top_feature_pitch_horizontal"].value()
         nor   = self._spin_boxes["number_of_rows"].value()
-        cur   = getattr(self.drawing_widget, "_dims", self.default_dims)
         return CoilDimensions(
             top_total_length=self.default_dims.top_total_length,
             top_intermediate_length=self.default_dims.top_intermediate_length,
@@ -1148,13 +1073,13 @@ class MainWindow(QMainWindow):
             header_box_height=hp * nor,
             right_cap_thickness=self.default_dims.right_cap_thickness,
             front_header_band_width=self.default_dims.front_header_band_width,
-            top_small_offset_1=cur.top_small_offset_1,
-            top_small_offset_2=cur.top_small_offset_2,
+            top_small_offset_1=self.default_dims.top_small_offset_1,
+            top_small_offset_2=self.default_dims.top_small_offset_2,
             fpi=self._spin_boxes["fpi"].value(),
             tube_dia_inch=self._spin_boxes["tube_dia_inch"].value(),
             pitch_vertical=vp,
             pitch_horizontal=hp,
-            connection_side=conn,
+            connection_side=self.default_dims.connection_side,
             job_order_no=job,
             coil_unique_id=uid,
             coil_type=ctype,
@@ -1171,8 +1096,8 @@ class MainWindow(QMainWindow):
             top_feature_pitch_horizontal=hp,
             top_feature_circle_1_dia=self.default_dims.top_feature_circle_1_dia,
             top_feature_circle_2_dia=self.default_dims.top_feature_circle_2_dia,
-            side_plate_outer_circle_dia=self._spin_boxes["side_plate_outer_circle_dia"].value(),
-            side_plate_inner_circle_dia=self._spin_boxes["side_plate_inner_circle_dia"].value(),
+            side_plate_outer_circle_dia=self.default_dims.side_plate_outer_circle_dia,
+            side_plate_inner_circle_dia=self.default_dims.side_plate_inner_circle_dia,
             sheet_metal_thickness=self._spin_boxes["sheet_metal_thickness"].value(),
             first_bend_header_side=self._spin_boxes["first_bend_header_side"].value(),
             first_bend_return_side=self.default_dims.first_bend_return_side,
@@ -1187,9 +1112,9 @@ class MainWindow(QMainWindow):
             return
         dims = self._collect_dimensions().sanitized()
         self._sync_spins(dims)
-        self._hp_w_label.setText(f"{dims.header_plate_total_width:.1f} mm")
-        self._hp_s_label.setText(f"{dims.header_plate_lifting_hole_side_dist:.1f} mm")
-        self._hp_n_label.setText(str(dims.header_plate_blank_off_hole_count))
+        self._bo_w_label.setText(f"{dims.blank_off_plate_total_width:.1f} mm")
+        self._bo_s_label.setText(f"{dims.blank_off_plate_lifting_hole_side_dist:.1f} mm")
+        self._bo_n_label.setText(str(dims.blank_off_plate_hole_count))
         self.drawing_widget.set_dimensions(dims)
         self._zoom_label.setText(f"{self.drawing_widget.zoom_percent()}%")
 
@@ -1208,8 +1133,6 @@ class MainWindow(QMainWindow):
             "header_dia":                   dims.header_dia,
             "top_feature_pitch_vertical":   dims.top_feature_pitch_vertical,
             "top_feature_pitch_horizontal": dims.top_feature_pitch_horizontal,
-            "side_plate_outer_circle_dia":  dims.side_plate_outer_circle_dia,
-            "side_plate_inner_circle_dia":  dims.side_plate_inner_circle_dia,
             "sheet_metal_thickness":        dims.sheet_metal_thickness,
             "first_bend_header_side":       dims.first_bend_header_side,
         }
@@ -1237,9 +1160,9 @@ class MainWindow(QMainWindow):
 
     def _export_png(self) -> None:
         dims         = self.drawing_widget._dims
-        default_name = f"{dims.coil_unique_id}-HP.png"
+        default_name = f"{dims.coil_unique_id}-BO.png"
         fp, _ = QFileDialog.getSaveFileName(
-            self, "Export Header Plate", default_name, "PNG Image (*.png)")
+            self, "Export Blank-Off Plate", default_name, "PNG Image (*.png)")
         if not fp:
             return
         if not fp.lower().endswith(".png"):
@@ -1249,7 +1172,7 @@ class MainWindow(QMainWindow):
 
     def _export_dxf(self) -> None:
         dims         = self.drawing_widget._dims
-        default_name = f"{dims.coil_unique_id}-HP.dxf"
+        default_name = f"{dims.coil_unique_id}-BO.dxf"
         fp, _ = QFileDialog.getSaveFileName(
             self, "Export DXF", default_name, "DXF Files (*.dxf)")
         if not fp:
@@ -1265,7 +1188,7 @@ class MainWindow(QMainWindow):
 
 def main() -> None:
     app = QApplication(sys.argv)
-    app.setApplicationName("Coil Helvix - Header Plate")
+    app.setApplicationName("Coil Helvix - Blank-Off Plate")
     access_ok, msg = _enforce_startup_access()
     if not access_ok:
         if msg:

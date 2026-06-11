@@ -180,10 +180,12 @@ class CoilHelvixTabs(QMainWindow):
         self.setCentralWidget(self.tabs)
 
         self.view_defs = [
-            ("frontview", "Front View"),
-            ("sideview", "Side View"),
-            ("side_view", "Header View"),
-            ("topview", "Top View"),
+            ("blankof", "BlankOffPlate"),
+            ("bottomplate", "Top&BottomPlate"),
+            ("intermidateplate", "IntermidatePlate"),
+            ("returnbendplate", "ReturnPlate"),
+            ("side_view", "HeaderPlate"),
+            ("topbottomview", "TopPlate"),
         ]
 
         for module_name, title in self.view_defs:
