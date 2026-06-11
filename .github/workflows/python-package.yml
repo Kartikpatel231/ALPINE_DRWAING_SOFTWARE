@@ -2,7 +2,8 @@ name: Build Tabbed Version (main1.py)
 
 on:
   push:
-    branches: ["main"]
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
@@ -14,17 +15,40 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python 3.10
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
       - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
+          pip install ezdxf
+
+      - name: Verify ezdxf installation
+        run: |
+          python -c "import ezdxf; print('EZDXF Version:', ezdxf.__version__)"
 
       - name: Build with PyInstaller
-        run: pyinstaller --onefile --name coil_helvix_tabbed --hidden-import PyQt6.QtPrintSupport --add-data "frontview.py;." --add-data "sideview.py;." --add-data "side_view.py;." --add-data "topview.py;." main1.py
+        run: |
+          pyinstaller --onefile `
+            --name coil_helvix_tabbed `
+            --hidden-import=PyQt6.QtPrintSupport `
+            --hidden-import=ezdxf `
+            --hidden-import=ezdxf.enums `
+            --collect-all=ezdxf `
+            --add-data "blankof.py;." `
+            --add-data "bottomplate.py;." `
+            --add-data "side_view.py;." `
+            --add-data "intermidateplate.py;." `
+            --add-data "returnbendplate.py;." `
+            --add-data "topbottomview.py;." `
+            main1.py
+
+      - name: List dist folder
+        run: |
+          dir dist
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
